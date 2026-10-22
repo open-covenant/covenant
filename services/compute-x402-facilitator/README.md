@@ -1,8 +1,9 @@
 # Covenant x402 payment verifier
 
 The verifier checks and settles payments for `covenant-compute-gateway`. Solana
-payments use the pinned official `@x402/svm` 2.28.0 exact-payment verifier;
-optional USDC on Base goes through an x402 facilitator (see below). The verifier
+payments use the pinned official `@x402/svm` 2.28.0 exact-payment verifier, or an
+x402 facilitator when one is configured; optional USDC on Base goes through an
+x402 facilitator (see below). The verifier
 listens only on loopback, requires a shared bearer secret, and does not expose a
 public facilitator or signing endpoint.
 
@@ -20,7 +21,8 @@ Shared environment:
   `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` (devnet available for rehearsal).
 - `COVENANT_GATEWAY_ASSET`: exact official USDC mint for the selected network.
 - `COVENANT_GATEWAY_PAY_TO`: merchant wallet address, with its USDC ATA created.
-- `COVENANT_GATEWAY_FEE_PAYER`: dedicated funded facilitator public key.
+- `COVENANT_GATEWAY_FEE_PAYER`: dedicated funded fee payer public key, either this
+  verifier's own or the Solana facilitator's (see below).
 - `COVENANT_GATEWAY_RESOURCE_URL`: canonical public HTTPS URL ending in
   `/v1/chat/completions`.
 - `COVENANT_GATEWAY_PRICE_MICRO_USDC`: fixed customer price, positive integer.
@@ -31,6 +33,18 @@ Verifier only:
   checked at startup and before each verification/settlement.
 - `COVENANT_GATEWAY_FEE_PAYER_KEY_FILE`: private absolute JSON file containing the
   64-byte Solana keypair; no group/world permissions. Never put this in a repo.
+  Not read when Solana settles through a facilitator.
+- `COVENANT_GATEWAY_SOLANA_FACILITATOR_URL`: optional HTTPS URL of an x402
+  facilitator that settles Solana payments and pays their network fees, for
+  example `https://facilitator.opencovenant.org`. Set
+  `COVENANT_GATEWAY_FEE_PAYER` to the fee payer that facilitator lists at
+  `GET /supported`; the verifier stops offering Solana if the two differ. The
+  verifier keeps the payer-signed transaction as evidence and decides each
+  outcome from the chain, so a lost facilitator reply cannot cost a second
+  payment. The gateway accepts a changed `COVENANT_GATEWAY_FEE_PAYER` at startup
+  only when no open payment, including a result still held for retries, used
+  the old one; otherwise it refuses to start. Going back to settling locally
+  works the same way: unset this and set a local fee payer and its key.
 - `COVENANT_GATEWAY_BRIDGE_PORT`: optional, default `4043`.
 
 Every request to the verifier needs the header

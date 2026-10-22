@@ -35,6 +35,12 @@ export function decode(wire) {
   if (!bytes.length || bytes.length > 1232 || bytes.toString('base64') !== wire) throw new Rejected('invalid transaction encoding');
   return { bytes, tx: getTransactionDecoder().decode(bytes) };
 }
+// A v3 payment from the official client uses about 13k of its 20k CU; the
+// 60k ceiling admits v2 memos (43,642 CU) signed by earlier Covenant clients.
+// Bound sponsorship: <= 2 signatures, 60k CU and 1000 microlamports/CU.
+// This bounds fees to 10,060 lamports per admitted authorization.
+export const SPONSORSHIP_LIMITS = Object.freeze({ enableSmartWalletVerification: false, maxRequiredSignatures: 2, maxComputeUnits: 60_000, maxPriorityFeeMicroLamports: 1_000 });
+
 /** The quote checks every Solana rail applies, whoever signs as fee payer. */
 export function createQuoteRules({ config, now }) {
   const { network, asset, payTo, feePayer, resourceUrl, secret } = config;
@@ -56,11 +62,7 @@ export function createQuoteRules({ config, now }) {
 export function createBridge({ signer, config, rpc, now = Date.now, verifier }) {
   const { network, asset, payTo, feePayer, resourceUrl, secret } = config;
   const { pricing, requirements } = createQuoteRules({ config, now });
-  // A v3 payment from the official client uses about 13k of its 20k CU; the
-  // 60k ceiling admits v2 memos (43,642 CU) signed by earlier Covenant clients.
-  // Bound sponsorship: <= 2 signatures, 60k CU and 1000 microlamports/CU.
-  // This bounds fees to 10,060 lamports per admitted authorization.
-  verifier ??= new ExactSvmScheme(signer, undefined, { enableSmartWalletVerification: false, maxRequiredSignatures: 2, maxComputeUnits: 60_000, maxPriorityFeeMicroLamports: 1_000 });
+  verifier ??= new ExactSvmScheme(signer, undefined, SPONSORSHIP_LIMITS);
   function seal(value) { return createHmac('sha256', secret).update(canonical(value)).digest('hex'); }
   async function assertNetwork() {
     const genesis = await rpc('getGenesisHash', []);

@@ -1,7 +1,9 @@
 //! Private, authenticated adapter to the loopback payment verifier. On Solana
-//! the fully signed transaction is returned before broadcast and fsynced by the
-//! gateway, and settlement retries those exact bytes. On Base the stored item is
-//! the signed EIP-3009 authorization, whose nonce the token accepts only once.
+//! the stored item is the payer-signed transaction: fully signed and retried
+//! as is when the verifier is the fee payer, or handed to a facilitator, whose
+//! signature over the same message makes every retry the same transaction. On
+//! Base it is the signed EIP-3009 authorization, whose nonce the token accepts
+//! only once.
 use crate::{
     payment_payload, GatewayError, PaymentRail, PaymentTerms, Result, SettlementStatus,
     TokenDomain, VerifiedPayment,

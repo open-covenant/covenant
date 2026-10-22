@@ -4,7 +4,8 @@ import { timingSafeEqual } from 'node:crypto';
 import { createKeyPairSignerFromBytes } from '@solana/kit';
 import { toFacilitatorSvmSigner } from '@x402/svm';
 import { HTTPFacilitatorClient } from '@x402/core/server';
-import { createBridge, Rejected } from './bridge.mjs';
+import { ExactSvmScheme } from '@x402/svm/exact/facilitator';
+import { createBridge, Rejected, SPONSORSHIP_LIMITS } from './bridge.mjs';
 import { createRemoteSvmRail } from './remote-svm.mjs';
 import { createEvmRail } from './evm.mjs';
 import { readTariffConfig } from './pricing.mjs';
@@ -39,7 +40,11 @@ const rpc = jsonRpc(rpcUrl);
 // pays the fees; otherwise this process co-signs with its own fee payer key.
 let bridge;
 if (process.env.COVENANT_GATEWAY_SOLANA_FACILITATOR_URL) {
+  // The official verifier runs here too, under Covenant's own limits. It only
+  // simulates, so its signer knows the fee payer's address and nothing more.
+  const verifyOnly = { address: config.feePayer, signMessages: async () => { throw new Error('verification never signs'); } };
   bridge = createRemoteSvmRail({ config, rpc,
+    verifier: new ExactSvmScheme(toFacilitatorSvmSigner(verifyOnly, { defaultRpcUrl: rpcUrl }), undefined, SPONSORSHIP_LIMITS),
     facilitator: new HTTPFacilitatorClient({ url: httpsUrl('COVENANT_GATEWAY_SOLANA_FACILITATOR_URL'), timeoutMs: 10_000 }),
     log: message => console.log(message) });
 } else {

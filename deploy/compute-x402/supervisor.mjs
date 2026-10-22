@@ -24,7 +24,8 @@ try{
   // Configuration or observer failure never changes financial worker behavior.
   try{stopWatchdog=startWatchdog(process.env,data);}catch{process.stderr.write('External rental observer unavailable; check observer configuration.\n');}
   seed(path.join(gateway,'identity.key'),process.env.COVENANT_GATEWAY_IDENTITY_B64,32);
-  seed(path.join(gateway,'fee-payer.json'),process.env.COVENANT_GATEWAY_FEE_PAYER_KEY_B64);
+  // Through a facilitator, Solana fees are its to pay and no local key is used.
+  if(!process.env.COVENANT_GATEWAY_SOLANA_FACILITATOR_URL)seed(path.join(gateway,'fee-payer.json'),process.env.COVENANT_GATEWAY_FEE_PAYER_KEY_B64);
   // This key authenticates persisted payment seals: rotating it strands recovery.
   const bridgeSecret=process.env.COVENANT_GATEWAY_BRIDGE_SECRET;
   if(typeof bridgeSecret!=='string'||bridgeSecret.length<32)throw Error('Persistent bridge secret required');

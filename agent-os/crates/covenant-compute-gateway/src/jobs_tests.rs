@@ -132,7 +132,7 @@ impl Runner {
 }
 #[async_trait]
 impl JobRunner for Runner {
-    async fn available(&self, _: Kind, _: u64) -> Result<bool> {
+    async fn available(&self, _: Kind, _: u64, _: &[String]) -> Result<bool> {
         Ok(self.available.load(Ordering::SeqCst))
     }
     fn sign(&self, _: Kind, purchase: &Purchase, request: &Value) -> Result<SignedJobEnvelope> {
@@ -760,4 +760,106 @@ async fn discovery_lists_each_job_with_its_price_merchant_and_free_status_read()
         paths[0].1["post"]["x-payment-info"]["price"]["amount"],
         "5.000000"
     );
+}
+
+#[tokio::test]
+async fn a_paid_job_that_cannot_start_within_the_hour_is_refunded() {
+    let dir = tempfile::tempdir().unwrap();
+    let rail = Arc::new(Rail::default());
+    rail.settles
+        .lock()
+        .unwrap()
+        .push_back(SettlementStatus::Pending);
+    let runner = Arc::new(Runner::new(&[]));
+    let jobs = open(dir.path(), rail, runner.clone());
+    let challenge = quote(&jobs).await;
+    let id = job_id(&challenge);
+    pay(&jobs, &challenge, "tx1").await.unwrap();
+    // Both running slots are taken, so the paid job waits.
+    {
+        let mut store = jobs.store.lock().await;
+        for n in 0..2 {
+            let mut busy = store.records[&id].clone();
+            busy.id = Uuid::new_v4();
+            busy.authorization_id = format!("busy-{n}");
+            busy.state = State::Running {
+                payment: VerifiedPayment {
+                    payer: "other".into(),
+                    authorization_id: format!("busy-{n}"),
+                    transaction_id: format!("busy-{n}"),
+                    encoded_transaction: "sealed".into(),
+                },
+                transaction_id: format!("busy-{n}"),
+                envelope: Box::new(
+                    runner
+                        .sign(Kind::Research, &busy.purchase, &request())
+                        .unwrap(),
+                ),
+                started_at_ms: crate::now_ms(),
+            };
+            store.save(busy).unwrap();
+        }
+    }
+    jobs.active.lock().await.extend(
+        jobs.store
+            .lock()
+            .await
+            .records
+            .keys()
+            .filter(|k| **k != id)
+            .copied(),
+    );
+    for _ in 0..5 {
+        jobs.due.lock().await.clear();
+        jobs.tick(crate::now_ms()).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(status(&jobs, id).await.unwrap()["status"], "running");
+    assert_eq!(
+        runner.runs.lock().unwrap().len(),
+        0,
+        "started without a free slot"
+    );
+    {
+        let mut store = jobs.store.lock().await;
+        let mut record = store.records[&id].clone();
+        record.updated_at_ms = 0;
+        store.save(record).unwrap();
+    }
+    let refunded = settled(&jobs, id, "refunded").await;
+    assert!(refunded["message"]
+        .as_str()
+        .unwrap()
+        .contains("could not start in time"));
+}
+
+#[tokio::test]
+async fn sales_pause_after_a_day_of_many_refunds() {
+    let dir = tempfile::tempdir().unwrap();
+    let jobs = open(dir.path(), Arc::default(), Arc::new(Runner::new(&[])));
+    let challenge = quote(&jobs).await;
+    pay(&jobs, &challenge, "tx1").await.unwrap();
+    settled(&jobs, job_id(&challenge), "completed").await;
+    {
+        let mut store = jobs.store.lock().await;
+        let template = store.records.values().next().unwrap().clone();
+        for n in 0..MAX_REFUNDS_PER_DAY {
+            let mut refunded = template.clone();
+            refunded.id = Uuid::new_v4();
+            refunded.authorization_id = format!("refunded-{n}");
+            refunded.updated_at_ms = crate::now_ms();
+            refunded.state = State::Refunded {
+                payer: "payer".into(),
+                transaction_id: format!("paid-{n}"),
+                reason: "test".into(),
+                refund_transaction_id: format!("refund-{n}"),
+            };
+            store.save(refunded).unwrap();
+        }
+    }
+    assert!(matches!(
+        jobs.handle(Kind::Research, request(), None, crate::now_ms())
+            .await,
+        Err(GatewayError::Unavailable(_))
+    ));
 }

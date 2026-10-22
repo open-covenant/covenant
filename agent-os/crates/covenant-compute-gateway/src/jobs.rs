@@ -63,6 +63,14 @@ const RUN_RETRY: Duration = Duration::from_secs(30);
 const REFUND_POLL: Duration = Duration::from_secs(15);
 const REFUND_REBUILD: Duration = Duration::from_secs(120);
 const UNPAID_POLL: Duration = Duration::from_secs(300);
+/// How long a paid job may wait to start before it is refunded.
+const PAID_START_LIMIT_MS: u64 = 3600 * 1000;
+/// Refunds in a day before new sales pause. Each refund leaves a small
+/// marker account on chain, so a stream of failing jobs cannot drain the
+/// fee payer.
+const MAX_REFUNDS_PER_DAY: usize = 20;
+/// How long a check of what is on sale is reused.
+const ON_SALE_CACHE: Duration = Duration::from_secs(10);
 
 /// A kind of job sold at `/v1/jobs/<kind>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -268,9 +276,15 @@ pub enum RunFailure {
 /// Buys a paid job's work on the Compute coordinator.
 #[async_trait]
 pub trait JobRunner: Send + Sync {
-    /// Whether only approved kinds of operator can win this job right now:
-    /// at least one serves it, and no generic operator could take it.
-    async fn available(&self, kind: Kind, offer_micro_usdc: u64) -> Result<bool>;
+    /// Whether only approved operators can win this job right now: one
+    /// serves it, no generic operator could take it, and no more operators
+    /// serve it than are approved.
+    async fn available(
+        &self,
+        kind: Kind,
+        offer_micro_usdc: u64,
+        approved: &[String],
+    ) -> Result<bool>;
     /// Signs the coordinator job for a paid request without submitting it.
     fn sign(&self, kind: Kind, purchase: &Purchase, request: &Value) -> Result<SignedJobEnvelope>;
     /// Submits the signed job (repeating it is safe) and waits for its
@@ -289,7 +303,12 @@ pub struct CoordinatorRunner {
 
 #[async_trait]
 impl JobRunner for CoordinatorRunner {
-    async fn available(&self, kind: Kind, offer_micro_usdc: u64) -> Result<bool> {
+    async fn available(
+        &self,
+        kind: Kind,
+        offer_micro_usdc: u64,
+        approved: &[String],
+    ) -> Result<bool> {
         let model = match kind {
             Kind::Research => SWARM_MODEL,
         };
@@ -307,7 +326,14 @@ impl JobRunner for CoordinatorRunner {
             if row.model == "any" {
                 return Ok(false);
             }
-            served |= row.model == model;
+            // Capacity counts operators without naming them; more than are
+            // approved means someone else advertises this job.
+            if row.model == model {
+                if row.operators > approved.len() {
+                    return Ok(false);
+                }
+                served = true;
+            }
         }
         Ok(served)
     }
@@ -642,6 +668,7 @@ pub struct Jobs {
     active: Mutex<BTreeSet<Uuid>>,
     /// When each job's next attempt at pending work is due.
     due: Mutex<BTreeMap<Uuid, Instant>>,
+    on_sale: Mutex<Option<(Instant, Vec<Kind>)>>,
     settlement_wait: Duration,
 }
 
@@ -700,6 +727,7 @@ impl Jobs {
             quote_checks: tokio::sync::Semaphore::new(4),
             active: Mutex::new(BTreeSet::new()),
             due: Mutex::new(BTreeMap::new()),
+            on_sale: Mutex::new(None),
             settlement_wait: Duration::ZERO,
         })
     }
@@ -731,7 +759,11 @@ impl Jobs {
             self.rail.check_price(&url, offer.price_atomic, now).await?;
             if !self
                 .runner
-                .available(offer.kind, offer.offer_micro_usdc)
+                .available(
+                    offer.kind,
+                    offer.offer_micro_usdc,
+                    &offer.approved_operators,
+                )
                 .await?
             {
                 return Err(GatewayError::Unavailable(format!(
@@ -746,14 +778,26 @@ impl Jobs {
             .map_err(|_| GatewayError::Unavailable("job readiness timed out".into()))?
     }
 
-    /// The offers on sale right now.
+    /// The offers on sale right now. Discovery reads are frequent and
+    /// anonymous, so the answer is reused for a few seconds.
     async fn available(&self, now: u64) -> Vec<&Offer> {
+        let mut cache = self.on_sale.lock().await;
+        if let Some((at, kinds)) = cache.as_ref() {
+            if at.elapsed() < ON_SALE_CACHE {
+                return self
+                    .offers
+                    .values()
+                    .filter(|o| kinds.contains(&o.kind))
+                    .collect();
+            }
+        }
         let mut available = Vec::new();
         for offer in self.offers.values() {
             if self.sellable(offer, now).await.is_ok() {
                 available.push(offer);
             }
         }
+        *cache = Some((Instant::now(), available.iter().map(|o| o.kind).collect()));
         available
     }
 
@@ -898,6 +942,21 @@ impl Jobs {
             }
             if store.records.len() >= MAX_RECORDS {
                 return Err(GatewayError::Unavailable("job store is full".into()));
+            }
+            let day_ago = now.saturating_sub(24 * 3600 * 1000);
+            let refunds = store
+                .records
+                .values()
+                .filter(|r| match r.state {
+                    State::Refunding { .. } => true,
+                    State::Refunded { .. } => r.updated_at_ms >= day_ago,
+                    _ => false,
+                })
+                .count();
+            if refunds >= MAX_REFUNDS_PER_DAY {
+                return Err(GatewayError::Unavailable(
+                    "paid jobs are paused; try again later".into(),
+                ));
             }
         }
         if self.quotes.lock().await.len() >= MAX_QUOTES {
@@ -1278,14 +1337,44 @@ impl Jobs {
             } => {
                 // Nothing is spent yet, so a job no approved operator can
                 // win is refunded rather than sold to whoever is cheapest.
-                match self
-                    .runner
-                    .available(record.kind, record.purchase.offer_micro_usdc)
-                    .await
-                {
+                // A job that cannot start within the hour is refunded too.
+                let waited_too_long =
+                    crate::now_ms().saturating_sub(record.updated_at_ms) > PAID_START_LIMIT_MS;
+                let capacity = self
+                    .offers
+                    .get(&record.kind)
+                    .map_or(1, |offer| offer.max_running);
+                let running_now = {
+                    let store = self.store.lock().await;
+                    store
+                        .records
+                        .values()
+                        .filter(|r| {
+                            r.kind == record.kind && matches!(r.state, State::Running { .. })
+                        })
+                        .count()
+                };
+                let ready = if running_now >= capacity {
+                    Err(GatewayError::Unavailable("waiting for a free slot".into()))
+                } else {
+                    self.runner
+                        .available(
+                            record.kind,
+                            record.purchase.offer_micro_usdc,
+                            &record.purchase.approved_operators,
+                        )
+                        .await
+                };
+                match ready {
                     Ok(true) => {}
                     Ok(false) => {
                         let reason = "No operator that runs this job was available.".to_string();
+                        self.transition(id, paid, refund(payment, transaction_id, reason))
+                            .await?;
+                        return Ok(());
+                    }
+                    Err(_) if waited_too_long => {
+                        let reason = "The job could not start in time.".to_string();
                         self.transition(id, paid, refund(payment, transaction_id, reason))
                             .await?;
                         return Ok(());

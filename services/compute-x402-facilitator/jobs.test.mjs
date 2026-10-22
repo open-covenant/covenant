@@ -110,7 +110,9 @@ test('a jobs rail reports its prices and merchant, and admits only a priced job 
 
 test('job prices name known job kinds on https URLs with positive amounts', () => {
   assert.equal(jobPriceTable({ [RESEARCH]: '5000000' }).get(RESEARCH), '5000000');
-  for (const prices of [{}, { 'https://example.com/v1/jobs/other': '1' }, { 'http://example.com/v1/jobs/research': '1' },
+  // An empty table sells nothing new; open jobs still settle and refund.
+  assert.equal(jobPriceTable({}).size, 0);
+  for (const prices of [{ 'https://example.com/v1/jobs/other': '1' }, { 'http://example.com/v1/jobs/research': '1' },
     { [RESEARCH]: '0' }, { [RESEARCH]: 5000000 }, { [`${RESEARCH}?x=1`]: '1' }, null, []]) {
     assert.throws(() => jobPriceTable(prices), /invalid job prices/);
   }
@@ -158,7 +160,7 @@ test('a refund is built only for a payment that landed as stored, back to the ac
   assert.equal(from, f.merchantAccount);
   assert.equal(to, await f.account(f.payer.address));
   assert.equal(Buffer.from(transfer.data).readBigUInt64LE(1), 5_000_000n);
-  assert.ok(keys.includes(await refundMarker(f.feePayer.address, payment.transaction_id)));
+  assert.ok(keys.includes(await refundMarker(f.merchant.address, payment.transaction_id)));
   assert.ok(Buffer.from(tx.messageBytes).includes(Buffer.from(refundMemo(f.terms.extra.quoteId))));
   assert.deepEqual(f.state.sends, [], 'building a refund broadcasts nothing');
 });
@@ -189,15 +191,29 @@ test('a sealed record that was not a real payment cannot be refunded, even with 
 test('a payment whose marker is already claimed reports that refund instead of building another', async () => {
   const f = await setup();
   const payment = await paid(f);
-  const marker = await refundMarker(f.feePayer.address, payment.transaction_id);
+  const marker = await refundMarker(f.merchant.address, payment.transaction_id);
   // Lamports sent to the marker by anyone do not count as a refund.
   f.state.accounts[marker] = { owner: '11111111111111111111111111111111', lamports: 5000, data: ['', 'base64'] };
-  assert.equal((await f.bridge.refund({ payment, paymentRequirements: f.terms })).status, 'built');
+  const earlier = await f.bridge.refund({ payment, paymentRequirements: f.terms });
+  assert.equal(earlier.status, 'built');
+  const { evidence } = JSON.parse(earlier.encoded_refund);
+  // The earlier refund landed and claimed the marker. A transaction someone
+  // else sent to the marker before it, from their own fee payer, is skipped.
+  const stranger = await generateKeyPairSigner();
+  const planted = await signTransactionMessageWithSigners(pipe(createTransactionMessage({ version: 0 }),
+    m => setTransactionMessageFeePayerSigner(stranger, m),
+    m => setTransactionMessageLifetimeUsingBlockhash({ blockhash: BLOCKHASH, lastValidBlockHeight: 1000n }, m),
+    m => appendTransactionMessageInstructions([{ programAddress: 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr',
+      accounts: [{ address: marker, role: 0 }], data: new TextEncoder().encode(refundMemo(f.terms.extra.quoteId)) }], m)));
+  const plantedId = getSignatureFromTransaction(planted);
   f.state.accounts[marker] = { owner: MEMO_PROGRAM, lamports: 897_840, data: ['AA==', 'base64'] };
-  f.state.history[marker] = [{ signature: 'earlier-refund', err: null }, { signature: 'someone-elses-transfer', err: null }];
-  f.state.landed['earlier-refund'] = { meta: { err: null }, transaction: [Buffer.from(`...${refundMemo(f.terms.extra.quoteId)}...`).toString('base64'), 'base64'] };
-  f.state.landed['someone-elses-transfer'] = { meta: { err: null }, transaction: [Buffer.from('a transfer').toString('base64'), 'base64'] };
-  assert.deepEqual(await f.bridge.refund({ payment, paymentRequirements: f.terms }), { status: 'refunded', transaction_id: 'earlier-refund' });
+  f.state.history[marker] = [{ signature: evidence.signature, err: null }, { signature: plantedId, err: null }];
+  f.state.landed[evidence.signature] = { meta: { err: null }, transaction: [evidence.transaction, 'base64'] };
+  f.state.landed[plantedId] = { meta: { err: null }, transaction: [getBase64EncodedWireTransaction(planted), 'base64'] };
+  assert.deepEqual(await f.bridge.refund({ payment, paymentRequirements: f.terms }), { status: 'refunded', transaction_id: evidence.signature });
+  // Without readable history the refund is still known to have happened.
+  f.state.history[marker] = [{ signature: 'unreadable', err: null }];
+  assert.deepEqual(await f.bridge.refund({ payment, paymentRequirements: f.terms }), { status: 'refunded', transaction_id: 'unrecorded' });
 });
 
 test('a stored refund is broadcast as stored, and only finality or a conclusive expiry ends it', async () => {
@@ -230,14 +246,31 @@ test('a stored refund is broadcast as stored, and only finality or a conclusive 
 test('a refund that failed because another one landed reports the one that landed', async () => {
   const f = await setup();
   const payment = await paid(f);
-  const refund = await f.bridge.refund({ payment, paymentRequirements: f.terms });
-  const marker = await refundMarker(f.feePayer.address, payment.transaction_id);
-  f.state.statuses[refund.transaction_id] = { confirmationStatus: 'finalized', err: { InstructionError: [3, 'AccountAlreadyInUse'] } };
+  const first = await f.bridge.refund({ payment, paymentRequirements: f.terms });
+  const second = await f.bridge.refund({ payment, paymentRequirements: f.terms });
+  const marker = await refundMarker(f.merchant.address, payment.transaction_id);
+  const landed = JSON.parse(first.encoded_refund).evidence;
+  f.state.statuses[second.transaction_id] = { confirmationStatus: 'finalized', err: { InstructionError: [3, 'AccountAlreadyInUse'] } };
   f.state.accounts[marker] = { owner: MEMO_PROGRAM, lamports: 897_840, data: ['AA==', 'base64'] };
-  f.state.history[marker] = [{ signature: refund.transaction_id, err: {} }, { signature: 'first-refund', err: null }];
-  f.state.landed['first-refund'] = { meta: { err: null }, transaction: [Buffer.from(refundMemo(f.terms.extra.quoteId)).toString('base64'), 'base64'] };
-  assert.deepEqual(await f.bridge.refundStatus({ payment, paymentRequirements: f.terms, refund: refund.encoded_refund }),
-    { status: 'finalized', transaction_id: 'first-refund' });
+  f.state.history[marker] = [{ signature: second.transaction_id, err: {} }, { signature: landed.signature, err: null }];
+  f.state.landed[landed.signature] = { meta: { err: null }, transaction: [landed.transaction, 'base64'] };
+  assert.deepEqual(await f.bridge.refundStatus({ payment, paymentRequirements: f.terms, refund: second.encoded_refund }),
+    { status: 'finalized', transaction_id: landed.signature });
+});
+
+test('a payment that lands with another signature from its payer is still the same payment', async () => {
+  const f = await setup();
+  const payment = await f.verify();
+  const { evidence } = JSON.parse(payment.encoded_transaction);
+  // Same message and fee payer signature; the payer's signature differs.
+  const tx = getTransactionDecoder().decode(Buffer.from(evidence.transaction, 'base64'));
+  const signatures = { ...tx.signatures, [f.payer.address]: new Uint8Array(64).fill(7) };
+  const variant = getBase64EncodedWireTransaction({ ...tx, signatures });
+  assert.notEqual(variant, evidence.transaction);
+  f.state.statuses[payment.transaction_id] = { confirmationStatus: 'finalized', err: null };
+  f.state.landed[payment.transaction_id] = { meta: { err: null }, transaction: [variant, 'base64'] };
+  assert.deepEqual(await f.bridge.settle({ payment, paymentRequirements: f.terms }), { status: 'finalized', transaction_id: payment.transaction_id });
+  assert.equal((await f.bridge.refund({ payment, paymentRequirements: f.terms })).status, 'built');
 });
 
 test('a refund record that was changed, or belongs to another payment, is refused', async () => {

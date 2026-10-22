@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { getCompiledTransactionMessageDecoder, getTransactionDecoder, getSignatureFromTransaction, assertIsFullySignedTransaction } from '@solana/kit';
 import { ExactSvmScheme } from '@x402/svm/exact/facilitator';
 import { batchPricingTotal, createPricingPolicy, validPaymentAmount } from './pricing.mjs';
-import { buildRefund, MEMO_PROGRAM, refundMarker, refundMemo } from './refunds.mjs';
+import { buildRefund, MEMO_PROGRAM, refundMarker } from './refunds.mjs';
 import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token';
 
 export const RAILS = Object.freeze({
@@ -38,6 +38,18 @@ function decode(wire) {
   if (!bytes.length || bytes.length > 1232 || bytes.toString('base64') !== wire) throw new Rejected('invalid transaction encoding');
   return { bytes, tx: getTransactionDecoder().decode(bytes) };
 }
+/**
+ * Whether two wire transactions are the same payment: the same message and
+ * the same fee payer signature, which is the transaction id. Any other
+ * signer may sign the same message again with a different signature, and
+ * the network accepts either.
+ */
+function sameTransaction(a, b) {
+  try {
+    const [x, y] = [decode(a).tx, decode(b).tx];
+    return Buffer.from(x.messageBytes).equals(Buffer.from(y.messageBytes)) && getSignatureFromTransaction(x) === getSignatureFromTransaction(y);
+  } catch { return false; }
+}
 /** One facilitator submission per payment at a time, repeated at most this often while the signature is unseen. */
 export const RESUBMIT_MS = 20_000;
 /** How long a facilitator call may run before the same bytes are also sent from here. */
@@ -60,7 +72,8 @@ export const JOB_KINDS = Object.freeze(['research', 'knowledge', 'agent', 'fix']
 export function jobPriceTable(prices) {
   if (prices === null || typeof prices !== 'object' || Array.isArray(prices)) throw new Error('invalid job prices');
   const table = new Map(Object.entries(prices));
-  if (table.size < 1 || table.size > 8) throw new Error('invalid job prices');
+  // An empty table sells nothing new while open jobs settle and refund.
+  if (table.size > 8) throw new Error('invalid job prices');
   for (const [url, amount] of table) {
     let parsed;
     try { parsed = new URL(url); } catch { throw new Error('invalid job prices'); }
@@ -208,7 +221,7 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
         if (status.err !== null) return { status: 'failed' };
         const transaction = await rpc('getTransaction', [signature, { encoding: 'base64', commitment: 'finalized', maxSupportedTransactionVersion: 0 }]);
         if (!transaction) return { status: 'pending' };
-        if (transaction.meta?.err !== null || !Array.isArray(transaction.transaction) || transaction.transaction[0] !== ev.transaction || transaction.transaction[1] !== 'base64') throw new Error('finalized transaction readback mismatch');
+        if (transaction.meta?.err !== null || !Array.isArray(transaction.transaction) || transaction.transaction[1] !== 'base64' || !sameTransaction(transaction.transaction[0], ev.transaction)) throw new Error('finalized transaction readback mismatch');
         return { status: 'finalized', transaction_id: signature };
       }
       if (status) return { status: 'pending' };
@@ -254,25 +267,29 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
     const status = (await rpc('getSignatureStatuses', [[ev.transactionId], { searchTransactionHistory: true }]))?.value?.[0];
     if (status?.confirmationStatus !== 'finalized' || status.err !== null) throw new Rejected('only a finalized payment is refunded');
     const landed = await rpc('getTransaction', [ev.transactionId, { encoding: 'base64', commitment: 'finalized', maxSupportedTransactionVersion: 0 }]);
-    if (!landed || landed.meta?.err !== null || landed.transaction?.[0] !== ev.transaction) throw new Rejected('payment readback does not match');
+    if (!landed || landed.meta?.err !== null || !sameTransaction(landed.transaction?.[0], ev.transaction)) throw new Rejected('payment readback does not match');
     const transfer = await paymentTransfer(ev.transaction, ev.payer);
     if (transfer.amount !== BigInt(terms.amount)) throw new Rejected('payment readback does not match');
     return transfer;
   }
   /**
-   * The refund that claimed this payment's marker, once one has: the oldest
-   * successful transaction on the marker that carries this quote's refund memo.
+   * The refund that claimed this payment's marker, once one has. The marker
+   * and the money move in one transaction, so a claimed marker proves the
+   * refund; its id is the oldest successful transaction this fee payer sent
+   * that names the marker, or "unrecorded" when history cannot show it.
    */
-  async function claimedRefund(marker, quoteId) {
+  async function claimedRefund(marker) {
     const account = (await rpc('getAccountInfo', [marker, { encoding: 'base64', commitment: 'finalized' }]))?.value;
     if (account?.owner !== MEMO_PROGRAM) return null;
-    const history = await rpc('getSignaturesForAddress', [marker, { limit: 50, commitment: 'finalized' }]);
-    for (const entry of [...(history ?? [])].reverse()) {
-      if (entry.err !== null) continue;
-      const landed = await rpc('getTransaction', [entry.signature, { encoding: 'base64', commitment: 'finalized', maxSupportedTransactionVersion: 0 }]);
-      const bytes = Buffer.from(landed?.transaction?.[0] ?? '', 'base64');
-      if (bytes.includes(Buffer.from(refundMemo(quoteId)))) return entry.signature;
-    }
+    try {
+      const history = await rpc('getSignaturesForAddress', [marker, { limit: 1000, commitment: 'finalized' }]);
+      for (const entry of [...(history ?? [])].reverse()) {
+        if (entry.err !== null) continue;
+        const landed = await rpc('getTransaction', [entry.signature, { encoding: 'base64', commitment: 'finalized', maxSupportedTransactionVersion: 0 }]);
+        const keys = getCompiledTransactionMessageDecoder().decode(decode(landed?.transaction?.[0]).tx.messageBytes).staticAccounts;
+        if (keys[0] === feePayer && keys.includes(marker)) return entry.signature;
+      }
+    } catch { /* The refund happened; only its id is unknown. */ }
     return 'unrecorded';
   }
   /**
@@ -285,8 +302,8 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
     const ev = storedPayment(payment, terms);
     await assertNetwork();
     const transfer = await landedTransfer(ev, terms);
-    const marker = await refundMarker(feePayer, ev.transactionId);
-    const claimed = await claimedRefund(marker, terms.extra.quoteId);
+    const marker = await refundMarker(payTo, ev.transactionId);
+    const claimed = await claimedRefund(marker);
     if (claimed) return { status: 'refunded', transaction_id: claimed };
     const latest = (await rpc('getLatestBlockhash', [{ commitment: 'confirmed' }]))?.value;
     const markerLamports = await rpc('getMinimumBalanceForRentExemption', [1]);
@@ -319,7 +336,7 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
     if (status && status.confirmationStatus !== 'finalized') return { status: 'pending' };
     // Another refund of this payment may have landed (one built before a
     // restart, say); the marker shows it, and this one can never land.
-    const claimed = await claimedRefund(saved.marker, terms.extra.quoteId);
+    const claimed = await claimedRefund(saved.marker);
     if (claimed) return { status: 'finalized', transaction_id: claimed };
     if (status) return { status: 'failed' };
     if (Number.isSafeInteger(finalized?.blockHeight) && finalized.blockHeight > saved.lastValidBlockHeight

@@ -2,12 +2,12 @@
 // payment sends the same amount back to the account it came from, with
 // Covenant's fee payer paying the network fee.
 //
-// Each refund also claims a one-byte marker account derived from the fee
-// payer and the payment, and hands it to the Memo program, which never
-// changes it. Only the fee payer's signature can claim it, and a claimed
-// marker cannot be claimed again, so a second refund of the same payment
-// fails on chain whatever the caller asks for. Sending lamports to the
-// marker beforehand does not block the claim.
+// Each refund also claims a one-byte marker account derived from the
+// merchant and the payment, owned by the Memo program, which never changes
+// it. Only the merchant's signature can claim it, and a claimed marker cannot
+// be claimed again, so a second refund of the same payment fails on chain
+// whatever the caller asks for. Sending lamports to the marker beforehand
+// does not block the claim.
 import {
   address, appendTransactionMessageInstructions, createAddressWithSeed, createTransactionMessage, getBase64EncodedWireTransaction,
   getSignatureFromTransaction, pipe, setTransactionMessageFeePayerSigner, setTransactionMessageLifetimeUsingBlockhash,
@@ -15,7 +15,7 @@ import {
 } from '@solana/kit';
 import { getTransferCheckedInstruction } from '@solana-program/token';
 import { getSetComputeUnitLimitInstruction, getSetComputeUnitPriceInstruction } from '@solana-program/compute-budget';
-import { getAllocateWithSeedInstruction, getAssignWithSeedInstruction, getTransferSolInstruction } from '@solana-program/system';
+import { getAllocateWithSeedInstruction, getTransferSolInstruction } from '@solana-program/system';
 import { createHash } from 'node:crypto';
 
 export const MEMO_PROGRAM = address('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
@@ -27,8 +27,8 @@ export function refundMemo(quoteId) { return `covenant.x402.refund:${quoteId}`; 
 export function markerSeed(paymentSignature) { return createHash('sha256').update(paymentSignature).digest('hex').slice(0, 32); }
 
 /** The marker account a refund of this payment claims. */
-export function refundMarker(feePayer, paymentSignature) {
-  return createAddressWithSeed({ baseAddress: feePayer, programAddress: MEMO_PROGRAM, seed: markerSeed(paymentSignature) });
+export function refundMarker(merchant, paymentSignature) {
+  return createAddressWithSeed({ baseAddress: merchant, programAddress: MEMO_PROGRAM, seed: markerSeed(paymentSignature) });
 }
 
 /**
@@ -37,7 +37,7 @@ export function refundMarker(feePayer, paymentSignature) {
  * refund cannot be made to pay for someone's account.
  */
 export async function buildRefund({ feePayer, merchant, mint, source, destination, amount, quoteId, paymentSignature, markerLamports, blockhash, lastValidBlockHeight }) {
-  const marker = await refundMarker(feePayer.address, paymentSignature);
+  const marker = await refundMarker(merchant.address, paymentSignature);
   const message = pipe(
     createTransactionMessage({ version: 0 }),
     m => setTransactionMessageFeePayerSigner(feePayer, m),
@@ -46,10 +46,9 @@ export async function buildRefund({ feePayer, merchant, mint, source, destinatio
       getSetComputeUnitLimitInstruction({ units: 60_000 }),
       getSetComputeUnitPriceInstruction({ microLamports: 1_000 }),
       getTransferSolInstruction({ source: feePayer, destination: marker, amount: BigInt(markerLamports) }),
-      getAllocateWithSeedInstruction({ newAccount: marker, baseAccount: feePayer, base: feePayer.address,
+      // Allocating with a seed also hands the account to the Memo program.
+      getAllocateWithSeedInstruction({ newAccount: marker, baseAccount: merchant, base: merchant.address,
         seed: markerSeed(paymentSignature), space: 1n, programAddress: MEMO_PROGRAM }),
-      getAssignWithSeedInstruction({ account: marker, baseAccount: feePayer, base: feePayer.address,
-        seed: markerSeed(paymentSignature), programAddress: MEMO_PROGRAM }),
       getTransferCheckedInstruction({ source, mint, destination, authority: merchant, amount, decimals: 6 }),
       { programAddress: MEMO_PROGRAM, accounts: [], data: new TextEncoder().encode(refundMemo(quoteId)) },
     ], m),

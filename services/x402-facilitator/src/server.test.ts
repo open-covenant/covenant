@@ -66,7 +66,6 @@ describe('facilitator HTTP', () => {
     const { url, store } = await start();
     for (const n of [1, 2, 3]) {
       store.upsertCatalogItem(
-        `http POST https://seller.example/${n}`,
         {
           resource: `https://seller.example/${n}`,
           type: 'http',
@@ -75,6 +74,7 @@ describe('facilitator HTTP', () => {
           lastUpdated: new Date(n * 1000).toISOString(),
           description: n === 2 ? 'Weather forecasts' : 'Text inference',
         },
+        'POST',
         n,
       );
     }

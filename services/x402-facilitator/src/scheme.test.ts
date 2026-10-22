@@ -1,3 +1,4 @@
+import { AccountRole, address } from '@solana/kit';
 import { describe, expect, it, vi } from 'vitest';
 import { createLighthouseTolerantScheme } from './scheme.js';
 import {
@@ -176,5 +177,38 @@ describe('wallet-guard fallback safety', () => {
 
     expect(result.isValid).toBe(false);
     expect(calls).not.toContain('sign');
+  });
+});
+
+describe('guards the library accepts without inspecting', () => {
+  const caps = {
+    maxComputeUnits: 100_000,
+    maxPriorityFeeMicroLamports: 100_000,
+    maxGuardedPriorityFeeLamports: 20_000n,
+    maxRequiredSignatures: 2,
+  };
+
+  async function trailingGuard(accounts: Parameters<typeof guard>[1]) {
+    const calls: string[] = [];
+    const { transaction, terms } = await buildPayment(({ source, destination, payer }) => [
+      computeLimit(),
+      computePrice(),
+      transferChecked(source, destination, payer),
+      memo(),
+      guard(27, accounts),
+    ]);
+    const scheme = createLighthouseTolerantScheme(stubSigner(calls, terms.feePayer) as never, undefined as never, () => {}, caps);
+    const requirements = requirementsFor(terms);
+    return scheme.verify(payloadFor(transaction, requirements) as never, requirements as never);
+  }
+
+  it('refuses a trailing guard that writes outside the payment', async () => {
+    const result = await trailingGuard([{ address: address(USDC), role: AccountRole.WRITABLE }]);
+    expect(result).toMatchObject({ isValid: false, invalidReason: 'invalid_exact_svm_payload_wallet_guards' });
+  });
+
+  it('keeps accepting a trailing guard that only asserts', async () => {
+    const result = await trailingGuard([]);
+    expect(result.isValid).toBe(true);
   });
 });

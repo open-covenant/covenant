@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import { extractDiscoveryInfo } from '@x402/extensions/bazaar';
+import { extractDiscoveryInfo, validateDiscoveryExtensionSpec } from '@x402/extensions/bazaar';
 import type { PaymentPayload, PaymentRequirements, SettleResponse, VerifyResponse } from '@x402/core/types';
 import { USDC, type FacilitatorConfig } from './config.js';
-import { sameAddress, utcDay, type CatalogItem, type Store } from './store.js';
+import { normalAddress, sameAddress, utcDay, type CatalogItem, type Store } from './store.js';
 
 /** The x402 facilitator this gate stands in front of. */
 export interface FacilitatorCore {
@@ -25,15 +25,21 @@ type Log = (event: Record<string, unknown>) => void;
 const VERIFIED_TTL_MS = 5 * 60_000;
 const MAX_VERIFIED = 10_000;
 const MAX_CATALOG_ITEM_BYTES = 32 * 1024;
+const REQUIREMENT_FIELDS = ['scheme', 'network', 'asset', 'amount', 'payTo', 'maxTimeoutSeconds', 'extra'] as const;
 
 /**
  * The checks a public facilitator needs before it spends its own gas: the
  * x402 libraries verify that a payment is real, not that settling it is worth
- * paying for. Anyone can call /settle, so a payment to oneself, a dust amount
- * or a flood of settlements would otherwise be paid for by the fee payer.
+ * paying for. Anyone can call /settle, so a payment to oneself, a dust amount,
+ * a flood of settlements or a burst of conflicting payments from one wallet
+ * would otherwise be paid for by the fee payer.
  */
 export class Gate {
   private readonly verified = new Map<string, { payer: string; atMs: number }>();
+  /** Settles between their cap check and their ledger write, counted against the caps. */
+  private readonly reserved = new Map<string, number>();
+  /** One settle per payer at a time: concurrent payments from one balance can all simulate clean and all but one fail on chain. */
+  private readonly settlingPayers = new Set<string>();
 
   constructor(
     private readonly core: FacilitatorCore,
@@ -50,7 +56,7 @@ export class Gate {
   async verify(payload: PaymentPayload, requirements: PaymentRequirements): Promise<VerifyResponse> {
     const refused = this.refuse(payload, requirements);
     if (refused) return { isValid: false, invalidReason: refused };
-    const result = await this.core.verify(payload, requirements);
+    const result = withoutMessages(await this.core.verify(payload, requirements));
     if (!result.isValid) return result;
     if (sameAddress(result.payer, requirements.payTo)) {
       return { isValid: false, invalidReason: 'self_send_not_allowed', payer: result.payer };
@@ -77,30 +83,61 @@ export class Gate {
     }
     if (sameAddress(payer, requirements.payTo)) return fail('self_send_not_allowed', payer);
 
+    const payerKey = `${network} ${normalAddress(payer)}`;
+    if (this.settlingPayers.has(payerKey)) return fail('payer_settlement_in_progress', payer);
+
+    // Check and reserve with no await in between, so concurrent settles cannot overshoot a cap.
     const metered = !this.config.unmeteredPayTo.some((address) => sameAddress(address, requirements.payTo));
+    const day = utcDay(this.now());
+    const networkKey = `${day} ${network}`;
+    const payToKey = `${networkKey} ${normalAddress(requirements.payTo)}`;
     if (metered) {
-      const day = utcDay(this.now());
-      if (this.store.meteredSettlements(network, day) >= this.config.dailySettlements) {
+      if (this.count(networkKey, network, day) >= this.config.dailySettlements) {
         return fail('facilitator_daily_limit_reached', payer);
       }
-      if (this.store.meteredSettlements(network, day, requirements.payTo) >= this.config.dailySettlementsPerPayTo) {
+      if (this.count(payToKey, network, day, requirements.payTo) >= this.config.dailySettlementsPerPayTo) {
         return fail('pay_to_daily_limit_reached', payer);
       }
+      this.adjust(networkKey, 1);
+      this.adjust(payToKey, 1);
     }
+    this.settlingPayers.add(payerKey);
 
-    const response = await this.core.settle(payload, requirements);
+    let response: SettleResponse;
+    try {
+      response = withoutMessages(await this.core.settle(payload, requirements));
+      if (response.transaction) {
+        this.store.recordSettlement({
+          network,
+          transaction: response.transaction,
+          payTo: requirements.payTo,
+          payer: response.payer ?? payer,
+          amount: requirements.amount,
+          metered,
+          succeeded: response.success,
+          settledAtMs: this.now(),
+        });
+      }
+    } finally {
+      this.settlingPayers.delete(payerKey);
+      if (metered) {
+        this.adjust(networkKey, -1);
+        this.adjust(payToKey, -1);
+      }
+    }
     if (!response.success) return { response };
-    this.store.recordSettlement({
-      network,
-      transaction: response.transaction,
-      payTo: requirements.payTo,
-      payer: response.payer ?? payer,
-      amount: requirements.amount,
-      metered,
-      settledAtMs: this.now(),
-    });
     this.log({ event: 'facilitator_settled', network, transaction: response.transaction, metered });
     return { response, bazaar: this.catalog(payload, requirements) };
+  }
+
+  private count(key: string, network: string, day: string, payTo?: string): number {
+    return this.store.meteredSettlements(network, day, payTo) + (this.reserved.get(key) ?? 0);
+  }
+
+  private adjust(key: string, delta: number): void {
+    const next = (this.reserved.get(key) ?? 0) + delta;
+    if (next > 0) this.reserved.set(key, next);
+    else this.reserved.delete(key);
   }
 
   private refuse(payload: PaymentPayload, requirements: PaymentRequirements): string | undefined {
@@ -126,8 +163,15 @@ export class Gate {
     const now = this.now();
     if (this.verified.size >= MAX_VERIFIED) {
       for (const [key, entry] of this.verified) {
-        if (now - entry.atMs > VERIFIED_TTL_MS || this.verified.size >= MAX_VERIFIED) this.verified.delete(key);
-        if (this.verified.size < MAX_VERIFIED / 2) break;
+        if (now - entry.atMs > VERIFIED_TTL_MS) this.verified.delete(key);
+      }
+      // Still full of fresh entries: forget the oldest half rather than rescan on every insert.
+      if (this.verified.size >= MAX_VERIFIED) {
+        let drop = this.verified.size / 2;
+        for (const key of this.verified.keys()) {
+          if (drop-- <= 0) break;
+          this.verified.delete(key);
+        }
       }
     }
     this.verified.set(this.key(payload), { payer, atMs: now });
@@ -141,40 +185,61 @@ export class Gate {
     return this.now() - entry.atMs <= VERIFIED_TTL_MS ? entry.payer : undefined;
   }
 
-  /** Bazaar: catalog the resource behind a settled payment that declared one. */
+  /**
+   * Bazaar: catalog the resource behind a settled payment that declared one.
+   * The declaration is checked against the spec's own rules, never against
+   * the schema it carries: compiling a caller's schema runs the caller's
+   * regular expressions on this process's only thread.
+   */
   private catalog(payload: PaymentPayload, requirements: PaymentRequirements): BazaarOutcome | undefined {
     const declared = payload.extensions?.bazaar;
     if (declared === undefined) return undefined;
-    let found: ReturnType<typeof extractDiscoveryInfo> = null;
     try {
-      found = extractDiscoveryInfo(payload, requirements, true);
-    } catch {
-      found = null;
+      if (typeof declared !== 'object' || declared === null || !validateDiscoveryExtensionSpec(declared as never).valid) {
+        return { status: 'rejected', rejectedReason: 'discovery info does not follow the bazaar spec' };
+      }
+      const found = extractDiscoveryInfo(payload, requirements, false);
+      if (!found) return { status: 'rejected', rejectedReason: 'discovery info is missing' };
+      const url = new URL(found.resourceUrl);
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+        return { status: 'rejected', rejectedReason: 'resource URL must be http or https' };
+      }
+      const input = found.discoveryInfo.input as { type: string; method?: unknown; toolName?: unknown };
+      const accepted = Object.fromEntries(
+        REQUIREMENT_FIELDS.filter((field) => requirements[field] !== undefined).map((field) => [field, requirements[field]]),
+      );
+      const item: CatalogItem = {
+        resource: found.resourceUrl,
+        type: input.type,
+        x402Version: found.x402Version,
+        accepts: [accepted],
+        lastUpdated: new Date(this.now()).toISOString(),
+        ...(typeof found.description === 'string' ? { description: found.description.slice(0, 500) } : {}),
+        ...(typeof found.mimeType === 'string' ? { mimeType: found.mimeType.slice(0, 100) } : {}),
+        ...(found.serviceName ? { serviceName: found.serviceName } : {}),
+        ...(found.tags?.length ? { tags: found.tags } : {}),
+        ...(found.iconUrl ? { iconUrl: found.iconUrl } : {}),
+        extensions: { bazaar: declared },
+      };
+      if (Buffer.byteLength(JSON.stringify(item)) > MAX_CATALOG_ITEM_BYTES) {
+        return { status: 'rejected', rejectedReason: 'discovery info is too large' };
+      }
+      const method = String(input.type === 'mcp' ? input.toolName : input.method ?? '');
+      this.store.upsertCatalogItem(item, method, this.now());
+      return { status: 'success' };
+    } catch (error) {
+      // The payment has settled; a listing problem must not turn that into an error.
+      this.log({ event: 'facilitator_catalog_failed', message: String(error) });
+      return { status: 'rejected', rejectedReason: 'discovery info could not be cataloged' };
     }
-    if (!found) return { status: 'rejected', rejectedReason: 'discovery info failed schema validation' };
-    const url = new URL(found.resourceUrl);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-      return { status: 'rejected', rejectedReason: 'resource URL must be http or https' };
-    }
-    const input = found.discoveryInfo.input as { type: string; method?: string; toolName?: string };
-    const item: CatalogItem = {
-      resource: found.resourceUrl,
-      type: input.type,
-      x402Version: found.x402Version,
-      accepts: [requirements as unknown as Record<string, unknown>],
-      lastUpdated: new Date(this.now()).toISOString(),
-      ...(found.description ? { description: found.description.slice(0, 500) } : {}),
-      ...(found.mimeType ? { mimeType: found.mimeType.slice(0, 100) } : {}),
-      ...(found.serviceName ? { serviceName: found.serviceName } : {}),
-      ...(found.tags?.length ? { tags: found.tags } : {}),
-      ...(found.iconUrl ? { iconUrl: found.iconUrl } : {}),
-      extensions: { bazaar: declared },
-    };
-    if (Buffer.byteLength(JSON.stringify(item)) > MAX_CATALOG_ITEM_BYTES) {
-      return { status: 'rejected', rejectedReason: 'discovery info is too large' };
-    }
-    const key = input.type === 'mcp' ? `mcp ${found.resourceUrl} ${input.toolName}` : `http ${input.method} ${found.resourceUrl}`;
-    this.store.upsertCatalogItem(key, item, this.now());
-    return { status: 'success' };
   }
+}
+
+/** RPC error text can carry provider URLs and keys, so callers get reason codes only. */
+function withoutMessages<T extends object>(response: T): T {
+  const { invalidMessage: _invalid, errorMessage: _error, ...rest } = response as T & {
+    invalidMessage?: unknown;
+    errorMessage?: unknown;
+  };
+  return rest as T;
 }

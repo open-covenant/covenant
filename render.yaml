@@ -285,6 +285,44 @@ services:
       - key: PRICE
         value: "1"
 
+  # Public x402 facilitator (services/x402-facilitator). Its fee payer and
+  # signer keys sign nothing else, so explorers can attribute settlements to it.
+  - type: web
+    name: covenant-x402-facilitator
+    runtime: node
+    plan: starter
+    region: frankfurt
+    autoDeploy: false
+    numInstances: 1
+    healthCheckPath: /healthz
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --filter @covenant/x402-facilitator... && pnpm --filter @covenant/x402-facilitator build
+    startCommand: pnpm --filter @covenant/x402-facilitator start
+    disk:
+      name: x402-facilitator-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: COVENANT_FACILITATOR_PUBLIC_URL
+        value: https://facilitator.opencovenant.org
+      - key: COVENANT_FACILITATOR_DATA_DIR
+        value: /var/data
+      - key: COVENANT_FACILITATOR_SOLANA_RPC_URL
+        sync: false
+      - key: COVENANT_FACILITATOR_SOLANA_FEE_PAYER_PRIVATE_KEY_JSON
+        sync: false
+      - key: COVENANT_FACILITATOR_SOLANA_FEE_PAYER_PUBLIC_KEY
+        value: FLsSQoswHoZDxrro8LYNXG7GC3JhJoPxbQnnXqr7rPgU
+      - key: COVENANT_FACILITATOR_BASE_RPC_URL
+        sync: false
+      - key: COVENANT_FACILITATOR_BASE_SIGNER_PRIVATE_KEY
+        sync: false
+      - key: COVENANT_FACILITATOR_BASE_SIGNER_ADDRESS
+        value: "0x80eBCc540b18baa4ab58AA059626E7D699ECa999"
+      - key: COVENANT_FACILITATOR_UNMETERED_PAY_TO
+        value: 52Ca4rDuLd4RuxA2sZC7GJoGVnPrE77Z6nXEFDTnvtqw,0x5fA1d0C0bfFE257a20027C523093F941834f5D66
+
 envVarGroups:
   - name: covenant-sandbox-shared
     envVars:

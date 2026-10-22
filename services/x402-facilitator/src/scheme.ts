@@ -1,5 +1,6 @@
+import { getCompiledTransactionMessageDecoder, getTransactionDecoder } from '@solana/kit';
 import { ExactSvmScheme } from '@x402/svm/exact/facilitator';
-import { verifyLighthouseTransaction, type PaymentTerms } from './lighthouse.js';
+import { LIGHTHOUSE_PROGRAM, verifyLighthouseTransaction, type PaymentTerms } from './lighthouse.js';
 
 /**
  * Fee caps for a facilitator that settles anyone's payments. The stock path
@@ -10,6 +11,8 @@ export interface FeeCaps {
   maxComputeUnits: number;
   maxPriorityFeeMicroLamports: number;
   maxGuardedPriorityFeeLamports: bigint;
+  /** Every signature costs the fee payer 5,000 lamports, signed or not by us. */
+  maxRequiredSignatures: number;
 }
 
 interface VerifyResult {
@@ -29,9 +32,9 @@ interface SimulatingSigner {
  * which is the only thing a wallet's guard instructions can cause. Mirrors
  * LAYOUT_RECOVERABLE_REASONS in @x402/svm.
  *
- * Everything absent from this set — a wrong amount, wrong recipient, wrong
+ * Everything absent from this set (a wrong amount, wrong recipient, wrong
  * mint, wrong memo, a fee payer transferring its own funds, or a failed
- * simulation — is a decision about the payment itself and must stand.
+ * simulation) is a decision about the payment itself and must stand.
  */
 const LAYOUT_REJECTIONS = new Set([
   'invalid_exact_svm_payload_transaction_instructions_length',
@@ -78,15 +81,36 @@ export function createLighthouseTolerantScheme(
   const scheme = new ExactSvmScheme(
     signer,
     settlementCache,
-    caps && { maxComputeUnits: caps.maxComputeUnits, maxPriorityFeeMicroLamports: caps.maxPriorityFeeMicroLamports },
+    caps && {
+      maxComputeUnits: caps.maxComputeUnits,
+      maxPriorityFeeMicroLamports: caps.maxPriorityFeeMicroLamports,
+      maxRequiredSignatures: caps.maxRequiredSignatures,
+    },
   );
   const hook = scheme as unknown as { _verify: VerifyFn };
   const stockVerify = hook._verify.bind(scheme) as VerifyFn;
   const simulator = signer as unknown as SimulatingSigner;
+  const guardCap = caps && { maxPriorityFeeLamports: caps.maxGuardedPriorityFeeLamports };
 
   hook._verify = async (payload, requirements) => {
     const stock = await stockVerify(payload, requirements);
-    if (stock.response.isValid) return stock;
+    if (stock.response.isValid) {
+      // The library accepts Lighthouse instructions after the transfer without
+      // looking at their accounts, and a Lighthouse memory write charges rent
+      // to whichever signer it names, the fee payer included. A payment that
+      // carries any must pass the same account rules as a guarded payment.
+      const transaction = (payload as { payload?: { transaction?: unknown } })?.payload?.transaction;
+      const terms = paymentTerms(requirements);
+      if (typeof transaction !== 'string' || !terms) return stock;
+      if (!hasProgram(transaction, LIGHTHOUSE_PROGRAM)) return stock;
+      const guarded = await verifyLighthouseTransaction(transaction, terms, guardCap);
+      if (guarded.ok) return stock;
+      log({ event: 'facilitator_verify_rejected', stockReason: 'accepted', guardReason: guarded.reason });
+      return {
+        response: { isValid: false, invalidReason: 'invalid_exact_svm_payload_wallet_guards', payer: stock.response.payer },
+        verificationPath: null,
+      };
+    }
 
     const reason = stock.response.invalidReason;
     if (typeof reason !== 'string' || !LAYOUT_REJECTIONS.has(reason)) return stock;
@@ -97,11 +121,7 @@ export function createLighthouseTolerantScheme(
     const terms = paymentTerms(requirements);
     if (!terms) return stock;
 
-    const guarded = await verifyLighthouseTransaction(
-      transaction,
-      terms,
-      caps && { maxPriorityFeeLamports: caps.maxGuardedPriorityFeeLamports },
-    );
+    const guarded = await verifyLighthouseTransaction(transaction, terms, guardCap);
     if (!guarded.ok) {
       log({
         event: 'facilitator_verify_rejected',
@@ -132,6 +152,19 @@ export function createLighthouseTolerantScheme(
   };
 
   return scheme;
+}
+
+/** Whether any instruction calls `program`. An undecodable transaction counts as yes. */
+export function hasProgram(transactionBase64: string, program: string): boolean {
+  try {
+    const transaction = getTransactionDecoder().decode(Buffer.from(transactionBase64, 'base64'));
+    const message = getCompiledTransactionMessageDecoder().decode(transaction.messageBytes);
+    return message.instructions.some(
+      (instruction) => String(message.staticAccounts[instruction.programAddressIndex]) === program,
+    );
+  } catch {
+    return true;
+  }
 }
 
 function paymentTerms(requirements: unknown): PaymentTerms | undefined {

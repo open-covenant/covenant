@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { PaymentPayload, PaymentRequirements } from '@x402/core/types';
 import type { Gate } from './gate.js';
-import type { CatalogFilter, CatalogItem, Store } from './store.js';
+import type { CatalogFilter, Store } from './store.js';
 
 export interface FacilitatorApi {
   gate: Gate;
@@ -31,25 +31,25 @@ class RequestError extends Error {
 const PAYMENT_LIMIT_PER_MINUTE = 120;
 const DISCOVERY_LIMIT_PER_MINUTE = 600;
 const MAX_TRACKED_CLIENTS = 50_000;
+const READINESS_CACHE_MS = 15_000;
 
-/** Fixed one-minute windows per client address. */
 class RateLimit {
-  private readonly windows = new Map<string, { minute: number; count: number }>();
+  private windows = new Map<string, number>();
+  private minute = 0;
 
   constructor(private readonly perMinute: number) {}
 
   allow(client: string, now = Date.now()): boolean {
     const minute = Math.floor(now / 60_000);
-    if (this.windows.size > MAX_TRACKED_CLIENTS) {
-      for (const [key, window] of this.windows) if (window.minute !== minute) this.windows.delete(key);
+    // A new minute starts every count over. Past the size cap within one
+    // minute (forged addresses), start over too rather than scan the map.
+    if (minute !== this.minute || this.windows.size >= MAX_TRACKED_CLIENTS) {
+      this.windows = new Map();
+      this.minute = minute;
     }
-    const window = this.windows.get(client);
-    if (!window || window.minute !== minute) {
-      this.windows.set(client, { minute, count: 1 });
-      return true;
-    }
-    window.count += 1;
-    return window.count <= this.perMinute;
+    const count = (this.windows.get(client) ?? 0) + 1;
+    this.windows.set(client, count);
+    return count <= this.perMinute;
   }
 }
 
@@ -149,14 +149,26 @@ export function createFacilitatorServer(
 ): Server {
   const payments = new RateLimit(PAYMENT_LIMIT_PER_MINUTE);
   const discovery = new RateLimit(DISCOVERY_LIMIT_PER_MINUTE);
-  return createServer((request, response) => {
-    void handle(request, response, api, config, log, payments, discovery).catch((error) => {
+  // Readiness asks every network's RPC for a balance; an unthrottled probe
+  // would spend RPC quota on anyone's behalf.
+  let readiness: { atMs: number; result: Promise<{ ok: boolean; networks: Record<string, unknown> }> } | undefined;
+  const ready = () => {
+    if (!readiness || Date.now() - readiness.atMs > READINESS_CACHE_MS) {
+      readiness = { atMs: Date.now(), result: api.readiness() };
+    }
+    return readiness.result;
+  };
+  const server = createServer((request, response) => {
+    void handle(request, response, { ...api, readiness: ready }, config, log, payments, discovery).catch((error) => {
       const status = error instanceof RequestError ? error.status : 500;
       const message = error instanceof RequestError ? error.message : 'facilitator error';
       if (status >= 500) log({ event: 'facilitator_error', message: String(error) });
       if (!response.headersSent) writeJson(response, status, { error: message });
     });
   });
+  server.headersTimeout = 10_000;
+  server.requestTimeout = 15_000;
+  return server;
 }
 
 async function handle(
@@ -189,23 +201,18 @@ async function handle(
     if (path === '/supported') return writeJson(response, 200, api.supported(), cors);
     if (path === '/discovery/resources') {
       const { limit, offset } = pageSize(url.searchParams);
-      const items = api.store.catalog(catalogFilter(url.searchParams));
-      return writeJson(
-        response,
-        200,
-        { x402Version: 2, items: items.slice(offset, offset + limit), pagination: { limit, offset, total: items.length } },
-        cors,
-      );
+      const { items, total } = api.store.catalog(catalogFilter(url.searchParams), { limit, offset });
+      return writeJson(response, 200, { x402Version: 2, items, pagination: { limit, offset, total } }, cors);
     }
     if (path === '/discovery/search') {
       const query = url.searchParams.get('query')?.trim();
       if (!query) throw new RequestError(400, 'query is required');
       const { limit } = pageSize(url.searchParams);
-      const found: CatalogItem[] = api.store.catalog(catalogFilter(url.searchParams), searchTerms(query));
+      const { items, total } = api.store.catalog(catalogFilter(url.searchParams), { limit, offset: 0 }, searchTerms(query));
       return writeJson(
         response,
         200,
-        { x402Version: 2, resources: found.slice(0, limit), partialResults: found.length > limit, pagination: null },
+        { x402Version: 2, resources: items, partialResults: total > items.length, pagination: null },
         cors,
       );
     }

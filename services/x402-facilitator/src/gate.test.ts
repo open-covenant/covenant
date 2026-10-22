@@ -40,14 +40,27 @@ class FakeCore implements FacilitatorCore {
   verifies = 0;
   settles = 0;
   payer = BUYER;
+  settleSucceeds = true;
+  /** Resolves pending settles when called; settles run immediately while it is unset. */
+  hold?: Promise<void>;
   async verify(): Promise<VerifyResponse> {
     this.verifies += 1;
-    return { isValid: true, payer: this.payer };
+    return { isValid: true, payer: this.payer, invalidMessage: 'rpc https://rpc.example/?api-key=secret' } as VerifyResponse;
   }
   async settle(p: PaymentPayload, r: PaymentRequirements): Promise<SettleResponse> {
     this.settles += 1;
+    await this.hold;
     const nonce = (p.payload as { authorization: { nonce: string } }).authorization.nonce;
-    return { success: true, transaction: `0xtx${nonce}`, network: r.network, payer: this.payer };
+    return this.settleSucceeds
+      ? { success: true, transaction: `0xtx${nonce}`, network: r.network, payer: this.payer }
+      : ({
+          success: false,
+          errorReason: 'transaction_failed',
+          errorMessage: 'rpc https://rpc.example/?api-key=secret',
+          transaction: `0xtx${nonce}`,
+          network: r.network,
+          payer: this.payer,
+        } as SettleResponse);
   }
 }
 
@@ -64,6 +77,8 @@ function gate(overrides: Partial<ConstructorParameters<typeof Gate>[2]> = {}, no
   );
   return { core, store, gate: instance };
 }
+
+const page = { limit: 20, offset: 0 };
 
 const { bazaar } = declareDiscoveryExtension({
   method: 'POST',
@@ -167,7 +182,7 @@ describe('Bazaar catalog', () => {
     const terms = requirements();
     const outcome = await instance.settle(payload(terms, { bazaar }), terms);
     expect(outcome.bazaar).toEqual({ status: 'success' });
-    const [item] = store.catalog({});
+    const [item] = store.catalog({}, page).items;
     expect(item).toMatchObject({
       resource: 'https://compute-inference.opencovenant.org/v1/chat/completions',
       type: 'http',
@@ -177,29 +192,130 @@ describe('Bazaar catalog', () => {
     });
   });
 
-  it('rejects a listing whose info fails its own schema, and still settles', async () => {
+  it('rejects a listing that does not follow the bazaar spec, and still settles', async () => {
     const { store, gate: instance } = gate();
     const terms = requirements();
-    const broken = { ...bazaar, info: { input: { type: 'http', method: 'POST' } } };
+    const broken = { ...bazaar, info: { input: { type: 'ftp', method: 'POST' } } };
     const outcome = await instance.settle(payload(terms, { bazaar: broken }), terms);
     expect(outcome.response.success).toBe(true);
     expect(outcome.bazaar).toMatchObject({ status: 'rejected' });
-    expect(store.catalog({})).toEqual([]);
+    expect(store.catalog({}, page).items).toEqual([]);
   });
 
-  it('keeps one entry per resource and merges the rails it was paid on', async () => {
+  it('keeps a separate entry per receiving rail, so one seller cannot rewrite another', async () => {
     const { store, gate: instance } = gate();
     const base = requirements();
+    const other = requirements({ payTo: '0x1111111111111111111111111111111111111111' });
     const solana = requirements({ network: SOLANA_MAINNET, asset: USDC[SOLANA_MAINNET]!, payTo: 'Seller1111' });
     await instance.settle(payload(base, { bazaar }, '0x01'), base);
-    await instance.settle(payload(solana, { bazaar }, '0x02'), solana);
-    const items = store.catalog({});
-    expect(items).toHaveLength(1);
-    expect(items[0]!.accepts.map((a) => a.network)).toEqual([SOLANA_MAINNET, BASE_MAINNET]);
-    expect(store.catalog({ network: BASE_MAINNET })).toHaveLength(1);
-    expect(store.catalog({ payTo: SELLER.toLowerCase() })).toHaveLength(1);
-    expect(store.catalog({ network: 'eip155:1' })).toHaveLength(0);
-    expect(store.catalog({}, ['covenant', 'inference'])).toHaveLength(1);
-    expect(store.catalog({}, ['weather'])).toHaveLength(0);
+    await instance.settle(payload(other, { bazaar }, '0x02'), other);
+    await instance.settle(payload(solana, { bazaar }, '0x03'), solana);
+    await instance.settle(payload(base, { bazaar }, '0x04'), base);
+    expect(store.catalog({}, page).total).toBe(3);
+    expect(store.catalog({ network: BASE_MAINNET }, page).total).toBe(2);
+    expect(store.catalog({ payTo: SELLER.toLowerCase() }, page).items[0]!.accepts[0]!.payTo).toBe(SELLER);
+    expect(store.catalog({ network: 'eip155:1' }, page).total).toBe(0);
+    expect(store.catalog({ extensions: 'bazaar' }, page).total).toBe(3);
+    expect(store.catalog({}, page, ['covenant', 'inference']).total).toBe(3);
+    expect(store.catalog({}, page, ['weather']).total).toBe(0);
+    expect(store.catalog({}, { limit: 1, offset: 1 }).items).toHaveLength(1);
+  });
+
+  it('never compiles the schema a payment carries', async () => {
+    const { store, gate: instance } = gate();
+    const terms = requirements();
+    // Ajv would run this pattern on the request thread; the gate only checks the spec's own rules.
+    const hostile = {
+      ...bazaar,
+      schema: { type: 'object', properties: { input: { type: 'object', properties: { method: { type: 'string', pattern: '^(a+)+$' } } } } },
+    };
+    const started = Date.now();
+    const outcome = await instance.settle(payload(terms, { bazaar: hostile }), terms);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(outcome.bazaar).toEqual({ status: 'success' });
+    expect(store.catalog({}, page).total).toBe(1);
+  });
+
+  it('reports a listing problem without failing a settled payment', async () => {
+    const { gate: instance } = gate();
+    const terms = requirements();
+    const mcp = payload(terms, { bazaar });
+    (mcp.resource as { url: string }).url = 'mcp://tools.example/run';
+    const outcome = await instance.settle(mcp, terms);
+    expect(outcome.response.success).toBe(true);
+    expect(outcome.bazaar).toMatchObject({ status: 'rejected' });
+  });
+});
+
+describe('what a settlement costs the signer', () => {
+  it('counts a broadcast that failed on chain against the caps, but not in the totals', async () => {
+    const { core, store, gate: instance } = gate({ dailySettlementsPerPayTo: 1 });
+    core.settleSucceeds = false;
+    const terms = requirements();
+    const first = await instance.settle(payload(terms, undefined, '0x01'), terms);
+    expect(first.response).toEqual({
+      success: false,
+      errorReason: 'transaction_failed',
+      transaction: '0xtx0x01',
+      network: BASE_MAINNET,
+      payer: BUYER,
+    });
+    await expect(instance.settle(payload(terms, undefined, '0x02'), terms)).resolves.toMatchObject({
+      response: { errorReason: 'pay_to_daily_limit_reached' },
+    });
+    expect(store.settlementTotals()).toEqual([]);
+  });
+
+  it('settles one payment per payer at a time', async () => {
+    const { core, gate: instance } = gate();
+    let release!: () => void;
+    core.hold = new Promise((resolve) => (release = resolve));
+    const terms = requirements();
+    const first = instance.settle(payload(terms, undefined, '0x01'), terms);
+    await new Promise((resolve) => setImmediate(resolve));
+    await expect(instance.settle(payload(terms, undefined, '0x02'), terms)).resolves.toMatchObject({
+      response: { success: false, errorReason: 'payer_settlement_in_progress' },
+    });
+    release();
+    await expect(first).resolves.toMatchObject({ response: { success: true } });
+    core.hold = undefined;
+    await expect(instance.settle(payload(terms, undefined, '0x03'), terms)).resolves.toMatchObject({
+      response: { success: true },
+    });
+  });
+
+  it('cannot be pushed past a cap by concurrent settlements from different payers', async () => {
+    const { core, gate: instance } = gate({ dailySettlementsPerPayTo: 2 });
+    let release!: () => void;
+    core.hold = new Promise((resolve) => (release = resolve));
+    const settle = (n: number) => {
+      const terms = requirements();
+      const p = payload(terms, undefined, `0x0${n}`);
+      (p.payload as { authorization: { from: string } }).authorization.from = `0x${String(n).repeat(40)}`;
+      core.payer = `0x${String(n).repeat(40)}`;
+      return instance.settle(p, terms);
+    };
+    const results = [settle(1), settle(2), settle(3), settle(4)];
+    await new Promise((resolve) => setImmediate(resolve));
+    release();
+    const outcomes = await Promise.all(results);
+    expect(outcomes.filter((o) => o.response.success)).toHaveLength(2);
+    expect(outcomes.filter((o) => o.response.errorReason === 'pay_to_daily_limit_reached')).toHaveLength(2);
+  });
+
+  it('gives a receiver one quota whatever the case of its address', async () => {
+    const { gate: instance } = gate({ dailySettlementsPerPayTo: 1 });
+    const lower = requirements({ payTo: SELLER.toLowerCase() });
+    const upper = requirements({ payTo: SELLER.toUpperCase().replace('0X', '0x') });
+    await instance.settle(payload(lower, undefined, '0x01'), lower);
+    await expect(instance.settle(payload(upper, undefined, '0x02'), upper)).resolves.toMatchObject({
+      response: { errorReason: 'pay_to_daily_limit_reached' },
+    });
+  });
+
+  it('never passes RPC error text back to the caller', async () => {
+    const { gate: instance } = gate();
+    const terms = requirements();
+    expect(JSON.stringify(await instance.verify(payload(terms), terms))).not.toContain('api-key');
   });
 });

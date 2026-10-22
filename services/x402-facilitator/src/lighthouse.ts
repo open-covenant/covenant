@@ -122,6 +122,15 @@ async function verifyPayerSignature(payer: string, transaction: Transaction): Pr
 }
 
 /**
+ * The fee payer pays limit x price in priority fees. A public facilitator caps
+ * that product instead of the price alone, because wallets trade one for the
+ * other: Phantom sets a high limit for its guards and prices to the market.
+ */
+export interface PriorityFeeCap {
+  maxPriorityFeeLamports: bigint;
+}
+
+/**
  * Verify a payment whose wallet bracketed the transfer with Lighthouse guards.
  *
  * Phantom inserts guard instructions both before and after the TransferChecked
@@ -131,15 +140,6 @@ async function verifyPayerSignature(payer: string, transaction: Transaction): Pr
  * signer or widen write access beyond the transfer's own accounts, the fee
  * payer, and the payer-derived Lighthouse memory.
  */
-/**
- * The fee payer pays limit x price in priority fees. A public facilitator caps
- * that product instead of the price alone, because wallets trade one for the
- * other: Phantom sets a high limit for its guards and prices to the market.
- */
-export interface PriorityFeeCap {
-  maxPriorityFeeLamports: bigint;
-}
-
 export async function verifyLighthouseTransaction(
   transactionBase64: string,
   terms: PaymentTerms,

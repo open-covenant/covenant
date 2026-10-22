@@ -4,7 +4,7 @@ import { ExactEvmScheme } from '@x402/evm/exact/facilitator';
 import { toFacilitatorEvmSigner } from '@x402/evm';
 import { BAZAAR } from '@x402/extensions/bazaar';
 import { SettlementCache, toFacilitatorSvmSigner } from '@x402/svm';
-import { createWalletClient, http, publicActions } from 'viem';
+import { createWalletClient, http, nonceManager, publicActions } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { base, baseSepolia } from 'viem/chains';
 import { BASE_MAINNET, BASE_SEPOLIA, SOLANA_MAINNET, USDC, loadConfig } from './config.js';
@@ -27,6 +27,7 @@ const SVM_FEE_CAPS = {
   maxComputeUnits: 100_000,
   maxPriorityFeeMicroLamports: 100_000,
   maxGuardedPriorityFeeLamports: 20_000n,
+  maxRequiredSignatures: 2,
 };
 
 /** Below Render's and most sellers' request timeouts; slower Base receipts come back as settlement_pending. */
@@ -77,7 +78,8 @@ if (config.solana) {
 
 if (config.base) {
   const { network, rpcUrl, signerPrivateKey, signerAddress } = config.base;
-  const account = privateKeyToAccount(signerPrivateKey);
+  // Concurrent settlements need distinct nonces from one signer.
+  const account = privateKeyToAccount(signerPrivateKey, { nonceManager });
   if (account.address.toLowerCase() !== signerAddress.toLowerCase()) {
     throw new Error(`Base signer key derives ${account.address}, not ${signerAddress}`);
   }

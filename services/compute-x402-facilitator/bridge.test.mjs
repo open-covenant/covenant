@@ -493,8 +493,8 @@ test('a facilitator holding the same key broadcasts exactly the journaled bytes'
   assert.deepEqual(await f.bridge.settle({ payment, paymentRequirements: f.terms }), { status: 'finalized', transaction_id: payment.transaction_id });
 });
 
-test('a facilitator that declines or is unreachable leaves the broadcast to the verifier', async () => {
-  for (const reply of [async () => ({ success: false, errorReason: 'facilitator_daily_limit_reached' }), async () => { throw new Error('unreachable'); }]) {
+test('a facilitator that declines, is unreachable or settles another signature leaves the broadcast to the verifier', async () => {
+  for (const reply of [async () => ({ success: false, errorReason: 'facilitator_daily_limit_reached' }), async () => { throw new Error('unreachable'); }, async () => ({ success: true, transaction: '1'.repeat(64) })]) {
     const f = await setup({ facilitator: { settle: reply } });
     const payment = await f.verify();
     f.state.signature = payment.transaction_id;

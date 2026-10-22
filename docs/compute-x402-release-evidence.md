@@ -148,13 +148,13 @@ replay records are retained after the body expires.
 
 ## Published client package
 
-The [v0.1.0 client prerelease](https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-client-v0.1.0)
+The [v0.1.0 client prerelease](https://github.com/open-covenant/covenant/releases/tag/compute-x402-client-v0.1.0)
 was published on 2026-10-18 at 01:18:45 UTC against the accepted source revision.
 The tarball and checksum asset were anonymously accessible and verified:
 
-- [Installable client tarball](https://github.com/open-covenant/covenant/releases/download/codex-compute-x402-client-v0.1.0/covenant-compute-x402-client-0.1.0.tgz)
+- [Installable client tarball](https://github.com/open-covenant/covenant/releases/download/compute-x402-client-v0.1.0/covenant-compute-x402-client-0.1.0.tgz)
 - SHA-256: `d38eddc61c035255744e8ac8193033daf4015fd191227f117b6f6476b7ac08a6`
-- [Published checksums](https://github.com/open-covenant/covenant/releases/download/codex-compute-x402-client-v0.1.0/SHA256SUMS)
+- [Published checksums](https://github.com/open-covenant/covenant/releases/download/compute-x402-client-v0.1.0/SHA256SUMS)
 
 The Node24 package is distributed as an immutable GitHub release asset. An npm
 registry publication is not claimed. Its installed contents are the same client

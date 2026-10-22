@@ -111,6 +111,25 @@ and that 20 random rows recomputed on CPU match at a cosine similarity of at
 least 0.999. On 1,000 mixed lines the job's pipeline, run on CPU, matched
 sentence-transformers to 0.99999976.
 
+## Live check
+
+On 2026-10-22 the deployed gateway code ran this job once on a real GPU, from a
+one-off Render job with no model or sandbox, on the 1,413-line
+`services/coding-gateway/src/server.ts` at `f42e10f00`:
+
+- Start-up took 51 seconds. The command took 70 seconds, including installs, on
+  an NVIDIA RTX A6000 (driver 570.133.20) through `CUDAExecutionProvider`, with
+  803 MiB of GPU memory in use once the model was loaded.
+- 1,413 rows came back; sampled rows matched sentence-transformers on CPU at a
+  cosine similarity of 0.9999999 or better.
+- Receipt: 101 seconds charged at 11,347 micro-USDC, 22,357 refunded, start-up
+  5,730 covered by Covenant, instance destroyed.
+
+Earlier attempts found three problems that are now handled: Jupyter refusing
+connections just after Compute reported the workspace ready, Vast refusing to
+create an instance on a machine that had just been released, and the control
+plane refusing that machine's stale quote.
+
 ## Expected cost
 
 About one minute of GPU start-up (Covenant pays), one to three minutes of

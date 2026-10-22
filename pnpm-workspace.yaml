@@ -15,6 +15,7 @@ packages:
   - services/mizuki
   - services/mizuki-policy-signer
   - services/mizuki-facilitator
+  - services/x402-facilitator
   - services/mizuki-deployment-controller
   - services/mizuki-updater
   - apps/mizuki-web

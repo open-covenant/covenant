@@ -56,7 +56,7 @@ export class Gate {
   async verify(payload: PaymentPayload, requirements: PaymentRequirements): Promise<VerifyResponse> {
     const refused = this.refuse(payload, requirements);
     if (refused) return { isValid: false, invalidReason: refused };
-    const result = withoutMessages(await this.core.verify(payload, requirements));
+    const result = this.withoutMessages(await this.core.verify(payload, requirements));
     if (!result.isValid) return result;
     if (sameAddress(result.payer, requirements.payTo)) {
       return { isValid: false, invalidReason: 'self_send_not_allowed', payer: result.payer };
@@ -105,7 +105,7 @@ export class Gate {
 
     let response: SettleResponse;
     try {
-      response = withoutMessages(await this.core.settle(payload, requirements));
+      response = this.withoutMessages(await this.core.settle(payload, requirements));
       if (response.transaction) {
         this.store.recordSettlement({
           network,
@@ -128,6 +128,14 @@ export class Gate {
     if (!response.success) return { response };
     this.log({ event: 'facilitator_settled', network, transaction: response.transaction, metered });
     return { response, bazaar: this.catalog(payload, requirements) };
+  }
+
+  /** RPC error text can carry provider URLs and keys, so callers get reason codes only; the log keeps it redacted. */
+  private withoutMessages<T extends object>(response: T): T {
+    const { invalidMessage, errorMessage, ...rest } = response as T & { invalidMessage?: unknown; errorMessage?: unknown };
+    const message = invalidMessage ?? errorMessage;
+    if (message !== undefined) this.log({ event: 'facilitator_provider_message', message: redact(message) });
+    return rest as T;
   }
 
   private count(key: string, network: string, day: string, payTo?: string): number {
@@ -235,11 +243,7 @@ export class Gate {
   }
 }
 
-/** RPC error text can carry provider URLs and keys, so callers get reason codes only. */
-function withoutMessages<T extends object>(response: T): T {
-  const { invalidMessage: _invalid, errorMessage: _error, ...rest } = response as T & {
-    invalidMessage?: unknown;
-    errorMessage?: unknown;
-  };
-  return rest as T;
+/** Provider URLs can carry API keys, so they never reach a log line. */
+function redact(message: unknown): string {
+  return String(message).replace(/[a-z]+:\/\/[^\s"']+/gi, '<url>').slice(0, 500);
 }

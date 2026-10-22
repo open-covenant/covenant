@@ -4,7 +4,7 @@ import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 const META_ARGS = [
   "build-with-x402",
   "Build with x402",
-  "Accept x402 payments in USDC on Solana and Base through Covenant's free facilitator, and give your agents paid AI inference with signed receipts.",
+  "Accept x402 payments in USDC on Solana and Base through Covenant's free facilitator, and give your agents paid AI inference and research reports with signed receipts.",
 ] as const;
 export const metadata = buildDocsMetadata(...META_ARGS);
 
@@ -83,6 +83,42 @@ const response = await pay('https://compute-inference.opencovenant.org/v1/chat/c
 const answer = await response.json();
 console.log(answer.choices[0].message.content);`;
 
+const researchInstall = `npm install @x402/fetch@2.28.0 @x402/svm@2.28.0 @solana/kit`;
+
+const researchCode = `// Run as an ES module (for example research.mjs) with Node 22 or later.
+import { readFile, writeFile } from 'node:fs/promises';
+import { wrapFetchWithPayment, x402Client } from '@x402/fetch';
+import { registerExactSvmScheme } from '@x402/svm/exact/client';
+import { createKeyPairSignerFromBytes } from '@solana/kit';
+
+// The agent's 64-byte Solana secret key, for example a keypair file from solana-keygen.
+const agentKeyBytes = new Uint8Array(JSON.parse(await readFile(process.env.AGENT_KEYPAIR, 'utf8')));
+
+const client = new x402Client();
+client.setSpendControls({ maxAmountPerPayment: '$5' });
+registerExactSvmScheme(client, { signer: await createKeyPairSignerFromBytes(agentKeyBytes) });
+const pay = wrapFetchWithPayment(fetch, client);
+
+const started = await pay('https://compute-inference.opencovenant.org/v1/jobs/research', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ objective: 'Which agent wallets let a user cap what an agent can spend, and how?' }),
+});
+if (started.status !== 202) throw new Error(\`Order failed (\${started.status}): \${await started.text()}\`);
+const { status_url } = await started.json();
+await writeFile('research-job.txt', status_url); // the way back to the report
+
+let job;
+do {
+  await new Promise(resolve => setTimeout(resolve, 60_000));
+  const response = await fetch(status_url);
+  if (!response.ok) continue; // try again next minute
+  job = await response.json();
+} while (!job || ['paying', 'running', 'refunding'].includes(job.status));
+
+if (job.status === 'completed') console.log(job.result.report);
+else console.log(\`The job ended as \${job.status}.\`, job.refund?.transaction ?? '');`;
+
 const sdkInstall = `# JavaScript 0.4.0 (Node 24; includes AgentKit and LangChain/LangGraph tools)
 npm install https://github.com/open-covenant/covenant/releases/download/compute-x402-client-v0.4.0/covenant-compute-x402-client-0.4.0.tgz
 
@@ -106,10 +142,11 @@ export default function BuildWithX402Page() {
           from its own wallets.
         </li>
         <li>
-          <strong>Covenant Compute.</strong> AI inference that agents pay for per request in USDC.
-          An agent with its own wallet can buy an answer without an account or API key, and every
-          answer comes with a receipt signed by the operator that ran it. The operator is the server
-          that runs your request; today Covenant runs every operator itself.
+          <strong>Covenant Compute</strong> sells AI inference and research reports that agents
+          pay for in USDC. An agent with its own wallet can buy an answer or a report without an
+          account or API key, and each one comes with a receipt signed by the operator that handled
+          it. An operator is the server that handles your request, and today Covenant runs every
+          operator itself.
         </li>
       </ul>
       <p>
@@ -450,15 +487,27 @@ https://facilitator.opencovenant.org/discovery/search?query=your+words`}</code>
         </thead>
         <tbody>
           <tr>
-            <td>Operator</td>
+            <td>Operator (inference)</td>
             <td>
               <code>9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR</code>
             </td>
           </tr>
           <tr>
-            <td>Gateway</td>
+            <td>Gateway (inference)</td>
             <td>
               <code>F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1</code>
+            </td>
+          </tr>
+          <tr>
+            <td>Operator (research reports)</td>
+            <td>
+              <code>fqtEZWvgFENXwAh6Wd4448iX3jaVghUSqGZ5LcvJ6Yq</code>
+            </td>
+          </tr>
+          <tr>
+            <td>Gateway (research reports)</td>
+            <td>
+              <code>D6kFBPgnVuiXiYeVsTj1JuqySN7ukRkoZBRvtkkLMWL</code>
             </td>
           </tr>
         </tbody>
@@ -483,6 +532,84 @@ https://facilitator.opencovenant.org/discovery/search?query=your+words`}</code>
       </p>
       <pre>
         <code>{sdkInstall}</code>
+      </pre>
+
+      <h2 id="research">Buy a research report</h2>
+      <p>
+        An agent can also order a research report that answers a question of its own choosing and
+        cites its sources. The research is done by IMD, a network of AI agents that are paid to
+        carry out research and other tasks; you can learn more at{" "}
+        <a href="https://identity.md">identity.md</a>. Covenant places the order with IMD for you,
+        and the Covenant operator that handled your job signs a receipt that records the job and
+        the exact report it returned.
+      </p>
+      <p>
+        A report costs 5 USDC on Solana mainnet (USDC mint{" "}
+        <code>EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v</code>) and usually takes a few minutes.
+        The paying wallet needs no SOL, because Covenant pays the network fees.
+      </p>
+      <ol>
+        <li>
+          Send a POST request to{" "}
+          <code>https://compute-inference.opencovenant.org/v1/jobs/research</code> with the header{" "}
+          <code>Content-Type: application/json</code> and a body such as{" "}
+          <code>{"{\"objective\": \"...\"}"}</code>. The objective is the question the report
+          should answer, in 20 to 4,000 characters. A request without such an objective is refused
+          with HTTP <code>400</code>, and you are not charged. Otherwise the server replies with
+          HTTP <code>402</code> and the payment requirements, including the 5 USDC price.
+        </li>
+        <li>
+          Pay with an x402 version 2 client that supports the <code>exact</code> scheme on Solana,
+          resending the same body. The server replies with HTTP <code>202</code> and the job&apos;s
+          status, including an absolute <code>status_url</code>. Work starts only after your
+          payment settles.
+        </li>
+        <li>
+          Poll the <code>status_url</code> about once a minute; these requests are free. The{" "}
+          <code>status</code> is one of <code>paying</code>, <code>running</code>,{" "}
+          <code>completed</code>, <code>refunding</code>, <code>refunded</code> or{" "}
+          <code>unpaid</code>. Unpaid means the payment did not go through and nothing was charged.
+          A <code>message</code> field explains the status in words.
+        </li>
+        <li>
+          When the status is <code>completed</code>, <code>result.report</code> holds the report in
+          Markdown. The result also includes <code>result.files</code>, which lists the files that
+          make up the report, each with its size, SHA-256 hash and a link;{" "}
+          <code>result.imd.job_id</code>, which is IMD&apos;s ID for the order; and{" "}
+          <code>result.covenant</code>, which holds the signed job, the exact output and the
+          operator&apos;s signed receipt. You can check these as described in{" "}
+          <a href="#receipts">Check a receipt</a>.
+        </li>
+      </ol>
+      <p>
+        If the job cannot be completed, the 5 USDC is refunded to the wallet that paid, usually
+        within a few minutes. The status changes to <code>refunded</code>, and{" "}
+        <code>refund.transaction</code> identifies the Solana transaction that returned your USDC.
+      </p>
+      <p>
+        Each job has a two-hour deadline. A job that cannot start within an hour of payment is
+        refunded, and so is a job that has neither completed nor been refunded a day after its
+        deadline. Most jobs reach a final status within minutes; the longest possible wait is
+        about 27 hours.
+      </p>
+      <p>
+        Save the <code>status_url</code> as soon as you receive it and keep it private. Anyone who
+        has the URL can read the report. If the <code>202</code> response is lost, send the same
+        request again with the same <code>Payment-Signature</code> header: you get the job&apos;s
+        status and its URL back, and you are not charged again. Reports are deleted seven days
+        after they complete, so save a copy before then.
+      </p>
+      <p>
+        By default, <code>@x402/fetch</code> 2.28.0 refuses any single payment over $1, so raise
+        its limit to $5 before you buy a report. The example below does that, sends the request,
+        saves the <code>status_url</code>, and then polls it once a minute until the job is
+        completed, refunded or unpaid.
+      </p>
+      <pre>
+        <code>{researchInstall}</code>
+      </pre>
+      <pre>
+        <code>{researchCode}</code>
       </pre>
 
       <h2 id="agent-games">Use it in an agent game</h2>

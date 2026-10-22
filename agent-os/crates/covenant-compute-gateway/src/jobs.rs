@@ -382,7 +382,9 @@ impl JobRunner for CoordinatorRunner {
         Ok(RunOutput {
             job_id: outcome.envelope.payload.job_id,
             operator: outcome.receipt.signer_pubkey_b58.clone(),
-            result: json!({"output":outcome.output,"receipt":outcome.receipt}),
+            result: json!({"envelope":outcome.envelope,"output":outcome.output,
+                "output_json":serde_json::to_string(&outcome.output).unwrap_or_default(),
+                "receipt":outcome.receipt}),
         })
     }
 }
@@ -1601,8 +1603,11 @@ impl Jobs {
 
 /// A finished job's result, as the customer reads it.
 fn present(kind: Kind, output: RunOutput) -> Value {
+    // The same fields an inference answer carries, so a receipt is checked the
+    // same way: the signed job, the exact output bytes and the receipt.
     let mut result = json!({"covenant":{"job_id":output.job_id,"operator":output.operator,
-        "receipt":output.result["receipt"],"output":output.result["output"]}});
+        "envelope":output.result["envelope"],"receipt":output.result["receipt"],
+        "output":output.result["output"],"output_json":output.result["output_json"]}});
     if kind == Kind::Research {
         let contents: Vec<Content> =
             serde_json::from_value(output.result["output"].clone()).unwrap_or_default();

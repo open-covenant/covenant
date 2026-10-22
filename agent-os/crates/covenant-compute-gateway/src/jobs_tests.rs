@@ -173,7 +173,7 @@ impl JobRunner for Runner {
         let output = |operator: &str| RunOutput {
             job_id: envelope.payload.job_id,
             operator: operator.into(),
-            result: json!({"receipt":{"signer_pubkey_b58":operator},"output":[
+            result: json!({"envelope":{"signed":true},"output_json":"[]","receipt":{"signer_pubkey_b58":operator},"output":[
                 {"type":"json","value":{"swarm":{"jobId":"imd-1","explorer":"https://explorer.imd.fun/jobs/imd-1"},
                     "outcome":{"state":"completed","files":[{"name":"report","path":"artifacts/report.md",
                         "mediaType":"text/markdown","bytes":9,"hash":"ab","url":"https://api.imd.fun/artifacts/ab",
@@ -345,6 +345,8 @@ async fn a_paid_job_settles_then_runs_and_its_status_returns_the_report() {
     assert_eq!(done["result"]["report"], "# Report\n");
     assert_eq!(done["result"]["imd"]["job_id"], "imd-1");
     assert_eq!(done["result"]["covenant"]["operator"], OPERATOR);
+    assert_eq!(done["result"]["covenant"]["output_json"], "[]");
+    assert_eq!(done["result"]["covenant"]["envelope"]["signed"], true);
     assert_eq!(done["payment"]["transaction"], "sig-tx1");
     assert_eq!(runner.signs.load(Ordering::SeqCst), 1);
     assert_eq!(runner.runs.lock().unwrap().len(), 1);

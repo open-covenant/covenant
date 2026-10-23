@@ -40,9 +40,9 @@ export const CONTRACTS = {
 export const USDG_DECIMALS = 6;
 
 /**
- * `eth_getLogs` on 4663 accepts any block range and refuses above this many
- * matching logs. It also refuses a query that runs too long. Both are answered
- * by halving the range.
+ * `eth_getLogs` on 4663 refuses above this many matching logs. It also refuses
+ * a query that runs too long, and one spanning more blocks than its filter
+ * allows. All three are answered by narrowing the range.
  */
 export const MAX_LOGS_PER_QUERY = 10_000;
 

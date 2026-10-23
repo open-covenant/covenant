@@ -31,7 +31,7 @@ const launchFailure: AgentEvent = {
   error: true,
 };
 
-function terminalOutcome(status: 'error' | 'cancelled') {
+function terminalOutcome(status: 'error' | 'failed' | 'cancelled') {
   // Gateway receipts are part of the daemon's final output, distinct from its
   // settlement receipt_id in the connector proof envelope.
   const receipt = {
@@ -43,7 +43,8 @@ function terminalOutcome(status: 'error' | 'cancelled') {
     kind: 'intent_outcome',
     intent_id: 'intent-1',
     status,
-    text: `GPU launch failed.\n[gpu_workspace final receipts: ${JSON.stringify([receipt])}]`,
+    text: `GPU command timed out.\n[gpu_workspace final receipts: ${JSON.stringify([receipt])}]\n[run accounting: {"total_usd":0.12}]`,
+    result_hash_hex: 'final-output-hash',
   };
 }
 
@@ -128,6 +129,7 @@ afterEach(() => {
 describe('Connector cleanup recovery and terminal delivery', () => {
   it.each([
     ['error', 'failed'],
+    ['failed', 'failed'],
     ['cancelled', 'cancelled'],
   ] as const)(
     'automatically relays a reconciled %s result and receipt despite a hung SSE stream',
@@ -169,6 +171,12 @@ describe('Connector cleanup recovery and terminal delivery', () => {
         context: frame.intent.context,
         execution: { run_key: expect.stringMatching(/^[a-f0-9]{64}$/), max_cost_usd: 0.5, gpu },
         events: [launchFailure],
+      });
+      expect((h.results()[0]!.result as { text: string }).text).toContain(
+        '[run accounting: {"total_usd":0.12}]',
+      );
+      expect(h.results()[0]!.proof).toMatchObject({
+        result: { result_hash_hex: 'final-output-hash' },
       });
       expect(h.connector.inFlight).toBe(0);
       expect(h.streamSignal()?.aborted).toBe(true);

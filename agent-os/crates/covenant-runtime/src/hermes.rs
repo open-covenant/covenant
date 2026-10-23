@@ -433,7 +433,12 @@ impl HermesRunner {
             }),
             // Agent outcomes — distinct from transport faults so the daemon
             // can tell "the run failed" from "the gateway broke".
-            Ok(RunOutcome::Failed { message }) => Err(RunnerError::RunFailed { message }),
+            Ok(RunOutcome::Failed { message, output }) => match output {
+                Some(output) if !output.is_empty() => {
+                    Err(RunnerError::RunFailedWithOutput { message, output })
+                }
+                _ => Err(RunnerError::RunFailed { message }),
+            },
             Ok(RunOutcome::Cancelled { output }) => match output {
                 Some(output) if !output.is_empty() => {
                     Err(RunnerError::RunCancelledWithOutput { output })
@@ -471,9 +476,16 @@ impl Runner for HermesRunner {
 }
 
 enum RunOutcome {
-    Completed { output: String },
-    Failed { message: String },
-    Cancelled { output: Option<String> },
+    Completed {
+        output: String,
+    },
+    Failed {
+        message: String,
+        output: Option<String>,
+    },
+    Cancelled {
+        output: Option<String>,
+    },
 }
 
 impl HermesRunner {
@@ -578,16 +590,10 @@ impl HermesRunner {
                 }
                 "failed" => {
                     return Ok(RunOutcome::Failed {
-                        message: [
-                            status
-                                .error
-                                .unwrap_or_else(|| "hermes run failed".to_string()),
-                            status.output.unwrap_or_default(),
-                        ]
-                        .into_iter()
-                        .filter(|v| !v.is_empty())
-                        .collect::<Vec<_>>()
-                        .join("\n"),
+                        message: status
+                            .error
+                            .unwrap_or_else(|| "hermes run failed".to_string()),
+                        output: status.output,
                     });
                 }
                 "cancelled" => {
@@ -2559,6 +2565,64 @@ network = "off"
             RunnerError::RunFailed { message } => assert_eq!(message, "compiler exploded"),
             other => panic!("expected RunFailed, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn failed_status_retains_final_output_separately_from_error() {
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        let output = "[gpu_workspace final receipts: [{\"job_id\":\"original-job\",\"receipt\":{\"charged_usdc_micros\":123,\"refunded_usdc_micros\":199877}}]]\n[run accounting: {\"total_usd\":0.12}]";
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "failed", "error": "GPU command timed out", "output": output
+            })))
+            .mount(&server)
+            .await;
+
+        let err = runner(&server)
+            .run_with_options(&hermes_card(30_000), &intent(), Some(&gpu_options()))
+            .await
+            .expect_err("settled cleanup does not make a failed workload successful");
+        assert_eq!(err.to_string(), "remote run failed: GPU command timed out");
+        match err {
+            RunnerError::RunFailedWithOutput {
+                message,
+                output: retained,
+            } => {
+                assert_eq!(message, "GPU command timed out");
+                assert_eq!(retained, output);
+            }
+            other => panic!("expected failure with final evidence, got {other:?}"),
+        }
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method == "POST" && r.url.path() == "/runs")
+                .count(),
+            1,
+            "retrieving failure evidence must never submit a replacement run"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_status_with_empty_output_keeps_legacy_error() {
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "failed", "error": "compiler exploded", "output": ""
+            })))
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            runner(&server).run(&hermes_card(30_000), &intent()).await,
+            Err(RunnerError::RunFailed { message }) if message == "compiler exploded"
+        ));
     }
 
     #[tokio::test]

@@ -5939,6 +5939,19 @@ impl Server {
                         settlement: None,
                     };
                 }
+                Err(covenant_runtime::RunnerError::RunFailedWithOutput { message, output }) => {
+                    warn!(agent = %card.id, error = %message, "agent run failed");
+                    // Cleanup can settle successfully while the workload fails.
+                    // Return its evidence through the normal result body, keeping
+                    // the failure status and without inventing a daemon receipt.
+                    return Response::IntentResult {
+                        intent_id,
+                        status: "failed".into(),
+                        text: format!("{message}\n\n{output}"),
+                        sources: Vec::new(),
+                        settlement: None,
+                    };
+                }
                 Err(e) => {
                     warn!(agent = %card.id, error = %e, "agent run failed");
                     return Response::Error {
@@ -19743,6 +19756,88 @@ required = {caps:?}
                 AuditKind::IntentDispatched { intent_id: i, .. } if *i == intent_id
             )),
             "async run must still write an IntentDispatched row for the intent",
+        );
+    }
+
+    #[tokio::test]
+    async fn hermes_failed_intent_retains_final_receipts_without_success_settlement() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let gateway = MockServer::start().await;
+        let output = "[gpu_workspace final receipts: [{\"job_id\":\"original-job\",\"receipt\":{\"charged_usdc_micros\":123,\"refunded_usdc_micros\":199877}}]]\n[run accounting: {\"total_usd\":0.12}]";
+        Mock::given(method("POST"))
+            .and(path("/runs"))
+            .and(header("authorization", "Bearer test-gateway-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "run_id": "failed-gpu-run"
+            })))
+            .expect(1)
+            .mount(&gateway)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/runs/failed-gpu-run"))
+            .and(header("authorization", "Bearer test-gateway-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "failed", "error": "GPU command timed out", "output": output
+            })))
+            .expect(1)
+            .mount(&gateway)
+            .await;
+        let server = server_with_runner(
+            vec![hermes_stub_card("coder", vec!["tool.code"])],
+            Arc::new(
+                covenant_runtime::HermesRunner::new(gateway.uri(), Some("test-gateway-key".into()))
+                    .unwrap(),
+            ),
+        );
+        grant_action(&server, "tool.code").await;
+        grant_action(&server, "memory.write").await;
+        let intent_id = match server
+            .op_respond(Request::SubmitIntent {
+                text: "create embeddings.py and run it".into(),
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::IntentResult {
+                intent_id, status, ..
+            } => {
+                assert_eq!(status, "running");
+                intent_id
+            }
+            other => panic!("expected async intent, got {other:?}"),
+        };
+        let outcome = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let outcome = server.intent_outcome(&intent_id).unwrap();
+                if outcome["status"] != "running" {
+                    break outcome;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("failed outcome must become available");
+        let final_text = format!("GPU command timed out\n\n{output}");
+        assert_eq!(outcome["status"], "failed");
+        assert_eq!(outcome["text"], final_text);
+        assert_eq!(outcome["result_hash_hex"], hash_hex(final_text.as_bytes()));
+        assert!(server.settlement.recent(10).await.unwrap().is_empty());
+        assert!(server
+            .audit
+            .recent(50)
+            .await
+            .unwrap()
+            .iter()
+            .all(|event| !matches!(event.kind, AuditKind::IntentDispatched { .. })));
+        assert_eq!(
+            server
+                .stop_intent(intent_id, &server.identity.agent_id())
+                .await
+                .unwrap()["status"],
+            "failed",
+            "a later stop must not overwrite the terminal workload failure"
         );
     }
 

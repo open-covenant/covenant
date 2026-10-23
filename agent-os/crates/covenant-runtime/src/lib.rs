@@ -258,6 +258,11 @@ pub enum RunnerError {
     /// outcome, distinct from a transport/gateway fault ([`Self::Remote`]).
     #[error("remote run failed: {message}")]
     RunFailed { message: String },
+    /// A failed run can still have final cleanup receipts and accounting.
+    /// Keep that evidence separate from the concise error so logs do not
+    /// duplicate the final output or discard it as a transport failure.
+    #[error("remote run failed: {message}")]
+    RunFailedWithOutput { message: String, output: String },
     /// The remote run was cancelled (by operator stop or upstream).
     /// An outcome, not a transport fault.
     #[error("remote run was cancelled")]

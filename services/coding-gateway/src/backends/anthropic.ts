@@ -8,7 +8,7 @@ import {
   type ComputeCleanupReport,
 } from '../compute.js';
 import { config, PRICING } from '../config.js';
-import type { GpuRunner } from '../gpu-run.js';
+import { GpuWorkloadError, type GpuRunner } from '../gpu-run.js';
 import { isolatedShellCommand } from '../sandbox-command.js';
 import type { CodingBackend, GatewayEvent, Sandbox, TokenUsage } from '../types.js';
 
@@ -323,7 +323,7 @@ export class AnthropicBackend implements CodingBackend {
             out = await execTool(tu, sandbox, emit, compute, gpuRunner);
           } catch (e) {
             isError = true;
-            out = `error: ${(e as Error).message}`;
+            out = e instanceof GpuWorkloadError ? e.toolResult : `error: ${(e as Error).message}`;
           }
           if (late) {
             emit({

@@ -18,7 +18,7 @@ import { LocalSandboxProvider } from './sandbox/local.js';
 import { E2bSandboxProvider } from './sandbox/e2b.js';
 import { config, PRICING } from './config.js';
 import { ArtifactStore, artifactConfigFromEnv } from './artifacts.js';
-import { GpuRunner } from './gpu-run.js';
+import { GpuRunner, gpuWorkloadSummary, isGpuCommandOutcome, MAX_GPU_COMMANDS } from './gpu-run.js';
 import {
   ComputeSession,
   computeConfig,
@@ -226,7 +226,7 @@ function sseFrame(e: GatewayEvent, runId: string): string {
       w = { event: 'run.completed', run_id: r, output: e.output };
       break;
     case 'run.failed':
-      w = { event: 'run.failed', run_id: r, error: e.error };
+      w = { event: 'run.failed', run_id: r, error: e.error, output: e.output };
       break;
     default:
       w = { event: 'unknown', run_id: r };
@@ -262,7 +262,11 @@ function boundedEvent(event: GatewayEvent): GatewayEvent {
     case 'run.completed':
       return { ...event, output: event.output.slice(0, MAX_EVENT_TEXT) };
     case 'run.failed':
-      return { ...event, error: event.error.slice(0, MAX_EVENT_TEXT) };
+      return {
+        ...event,
+        error: event.error.slice(0, MAX_EVENT_TEXT),
+        output: event.output?.slice(0, MAX_EVENT_TEXT),
+      };
     case 'tool.started':
       return { ...event, preview: event.preview?.slice(0, 500) };
     case 'approval.request':
@@ -392,6 +396,21 @@ function startRun(
                 run.updatedAt = new Date().toISOString();
                 persistRun(run);
               },
+              commands: () => run.gpuCommands ?? [],
+              recordCommand: (outcome) => {
+                if (!isGpuCommandOutcome(outcome)) throw new Error('invalid GPU command outcome');
+                const commands = [...(run.gpuCommands ?? [])];
+                const index = commands.findIndex((command) => command.id === outcome.id);
+                if (index < 0) commands.push(structuredClone(outcome));
+                else commands[index] = structuredClone(outcome);
+                if (commands.length > MAX_GPU_COMMANDS)
+                  throw new Error('GPU command limit exceeded');
+                // Retain pending/failed evidence in memory even if a disk write
+                // fails: a backend that catches the tool error cannot claim success.
+                run.gpuCommands = commands;
+                run.updatedAt = new Date().toISOString();
+                persistRun(run);
+              },
             })
           : undefined,
         recordProviderRequest: () => {
@@ -439,7 +458,10 @@ function startRun(
         ? await captureRepositoryFiles(sandbox, run.changedFiles ?? [])
         : await captureFiles(sandbox).catch(() => []);
       if (run.abort.signal.aborted) throw new Error('run aborted');
-      desiredStatus = 'completed';
+      const workload = gpuWorkloadSummary(run.gpuCommands);
+      desiredStatus = workload.status === 'failed' ? 'failed' : 'completed';
+      if (desiredStatus === 'failed')
+        run.error = 'GPU workload did not succeed; see recorded command outcomes';
       run.updatedAt = new Date().toISOString();
       const seconds = (Date.now() - startedAt) / 1000;
       run.nonComputeUsd = completedRunCost(
@@ -465,7 +487,7 @@ function startRun(
               }),
         };
       console.log(
-        `run ${id} completed (${Math.round(seconds * 1000)}ms, ${run.files?.length ?? 0} files, ${run.events.length} events)`,
+        `run ${id} ${desiredStatus} (${Math.round(seconds * 1000)}ms, ${run.files?.length ?? 0} files, ${run.events.length} events)`,
       );
       persistRun(run);
     } catch (e) {
@@ -579,6 +601,11 @@ function finishRun(run: Run): void {
   const live = run;
   run = { ...run, events: [...run.events] };
   run.status = run.desiredStatus ?? 'failed';
+  const workload = gpuWorkloadSummary(run.gpuCommands);
+  if (run.status === 'completed' && workload.status === 'failed') {
+    run.status = 'failed';
+    run.error = 'GPU workload did not succeed; see recorded command outcomes';
+  }
   run.costUsd =
     run.nonComputeUsd === undefined
       ? run.reservedMax // Crash recovery retains conservative total accounting.
@@ -594,6 +621,7 @@ function finishRun(run: Run): void {
     // Reserve room for the complete fixed evidence in both the status response
     // and the bounded terminal SSE event. Only model prose may be truncated.
     const suffix =
+      (run.gpuCommands?.length ? `\n[gpu_workspace workload: ${JSON.stringify(workload)}]` : '') +
       (run.gpuOutputs?.length
         ? `\n[gpu_workspace outputs: ${JSON.stringify(run.gpuOutputs)}]`
         : '') +
@@ -616,7 +644,7 @@ function finishRun(run: Run): void {
   const event: GatewayEvent =
     run.status === 'completed'
       ? { type: 'run.completed', output: run.output ?? '' }
-      : { type: 'run.failed', error: run.error ?? run.status };
+      : { type: 'run.failed', error: run.error ?? run.status, output: run.output };
   // Replace a previously prepared terminal event if persistence is retried.
   run.events = run.events.filter((e) => e.type !== 'run.completed' && e.type !== 'run.failed');
   const terminal = recordEvent(run, event);
@@ -1315,6 +1343,7 @@ export const server = createServer(async (req, res) => {
           costUsd: run.costUsd === undefined ? undefined : roundUsd(run.costUsd),
           providerReceipts: run.providerReceipts,
           compute: run.compute,
+          gpuCommands: run.gpuCommands,
         } satisfies RunState);
       }
       if (req.method === 'GET' && parts[3] === 'artifacts') {

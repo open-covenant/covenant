@@ -83,6 +83,7 @@ async function boot(
     gpuCommand?: (opts: RunOptions) => Promise<unknown>;
     /** What the GPU workspace returns for a command; no Jupyter is contacted. */
     workspaceOutcome?: import('../src/workspace-exec.js').WorkspaceJobOutcome;
+    workspaceError?: Error;
   } = {},
 ) {
   vi.resetModules();
@@ -197,8 +198,11 @@ async function boot(
       listUsdPerSec: options.tariffUsdPerSec,
     })),
   }));
-  const runWorkspaceJob = vi.fn(async () => options.workspaceOutcome!);
-  if (options.workspaceOutcome)
+  const runWorkspaceJob = vi.fn(async () => {
+    if (options.workspaceError) throw options.workspaceError;
+    return options.workspaceOutcome!;
+  });
+  if (options.workspaceOutcome || options.workspaceError)
     vi.doMock('../src/workspace-exec.js', async (importOriginal) => ({
       ...(await importOriginal<typeof import('../src/workspace-exec.js')>()),
       runWorkspaceJob,
@@ -303,6 +307,28 @@ async function untilStatus(gateway: Awaited<ReturnType<typeof boot>>, id: string
   }
   throw new Error(`run did not reach ${status}`);
 }
+
+const commandTimings = {
+  workspaceReadyWaitMs: 101,
+  stagingMs: 203,
+  commandBudgetMs: 250_000,
+  commandElapsedMs: 41_200,
+  collectionMs: 307,
+};
+const completedCommand = (
+  overrides: Partial<import('../src/workspace-exec.js').WorkspaceJobOutcome> = {},
+): import('../src/workspace-exec.js').WorkspaceJobOutcome => ({
+  exitCode: 0,
+  timedOut: false,
+  durationMs: 41_200,
+  timings: commandTimings,
+  stdoutTail: 'command finished',
+  stderrTail: '',
+  outputs: [{ path: 'report.json', bytes: Buffer.from('{}') }],
+  missing: [],
+  skipped: [],
+  ...overrides,
+});
 
 const request = (id: string, gpu = true) => ({
   session_id: id,
@@ -496,6 +522,144 @@ describe('GPU gateway authorization and lifecycle', () => {
     expect(gateway.sandbox.destroy).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['timeout', { exitCode: null, timedOut: true, outputs: [], missing: ['report.json'] }],
+    ['unknown_exit', { exitCode: null }],
+    ['nonzero_exit', { exitCode: 2 }],
+    ['missing_outputs', { outputs: [], missing: ['report.json'] }],
+    ['oversized_outputs', { outputs: [], skipped: ['report.json'] }],
+    ['execution_error', null],
+  ] as const)(
+    'fails %s despite normal model completion, after cleanup, with durable outcome and full receipt',
+    async (failure, result) => {
+      let toolError: unknown;
+      const gateway = await boot({
+        workspaceOutcome: result ? completedCommand(JSON.parse(JSON.stringify(result))) : undefined,
+        workspaceError: result ? undefined : new Error('workspace network failed'),
+        backendOutput: 'All files were produced successfully. '.repeat(1_000),
+        gpuCommand: async (opts) => {
+          // The real Anthropic loop reports a failed tool and may still return
+          // normal model prose. That prose cannot override the durable command.
+          try {
+            await opts.gpuRunner!.run(
+              { job_id: 'smoke-job', command: 'python embed.py', outputs: ['report.json'] },
+              opts.sandbox,
+            );
+          } catch (error) {
+            toolError = error;
+          }
+        },
+      });
+      const key = `failure-${failure}`;
+      const { run_id } = (await (await gateway.post(request(key))).json()) as { run_id: string };
+      const stopping = await untilStatus(gateway, run_id, 'stopping');
+      expect(toolError).toBeDefined();
+      expect(stopping.gpuCommands).toHaveLength(1);
+      expect(stopping.gpuCommands[0]).toMatchObject({ status: 'failed', failure });
+      expect(stopping.compute.complete).toBe(false);
+      expect(stopping.usage).toMatchObject({ inputTokens: 100, outputTokens: 10 });
+      gateway.reports.set(key, settled(key));
+      await gateway.reconcileCompute();
+      const final = await untilStatus(gateway, run_id, 'failed');
+      expect(final.error).toContain('GPU workload did not succeed');
+      expect(final.output.length).toBeLessThanOrEqual(8_000);
+      expect(final.output).toContain('[model output truncated]');
+      const workload = JSON.parse(final.output.match(/\[gpu_workspace workload: (.*)\]\n/)[1]);
+      expect(workload).toMatchObject({
+        status: 'failed',
+        failures: [failure],
+        outputs_checked: 'command_declared_only',
+      });
+      if (result) expect(workload.outcome.timings).toMatchObject(commandTimings);
+      expect(final.output).toContain('[gpu_workspace final receipts:');
+      const accounting = JSON.parse(final.output.match(/\[run accounting: (.*)\]$/)[1]);
+      expect(accounting).toMatchObject({
+        model: { usd: 0.00045, basis: 'usage_at_list_price' },
+        sandbox: { usd: 0.12, basis: 'maximum_reservation' },
+        gpu: { usd: 0.01 },
+        totalUsd: 0.13045,
+      });
+      expect(final.costUsd).toBe(0.13045);
+      expect(gateway.launch).toHaveBeenCalledOnce();
+      expect(gateway.sandbox.destroy).toHaveBeenCalledOnce();
+      const saved = JSON.parse(readFileSync(gateway.runPath, 'utf8'))[0];
+      expect(saved.gpuCommands).toEqual(final.gpuCommands);
+      expect(saved.events.at(-1)).toMatchObject({ type: 'run.failed', output: final.output });
+      const stream = await (await gateway.get(`/v1/runs/${run_id}/events`)).text();
+      const event = stream
+        .split('\n')
+        .filter((line) => line.startsWith('data: '))
+        .map((line) => JSON.parse(line.slice(6)))
+        .find((event) => event.event === 'run.failed');
+      expect(event.output).toBe(final.output);
+    },
+  );
+
+  it('keeps the complete receipt and all output links when diagnostics need extensive JSON escaping', async () => {
+    const paths = Array.from({ length: 8 }, (_, index) => `${index}-${'x'.repeat(121)}.json`);
+    const gateway = await boot({
+      backendOutput: 'long explanation '.repeat(1_000),
+      workspaceOutcome: completedCommand({
+        outputs: paths.map((path) => ({ path, bytes: Buffer.from('{}') })),
+        stdoutTail: '\u0000'.repeat(2_000),
+        stderrTail: '\u0000'.repeat(2_000),
+      }),
+      gpuCommand: (opts) =>
+        opts.gpuRunner!.run(
+          { job_id: 'smoke-job', command: 'python embed.py', outputs: paths },
+          opts.sandbox,
+        ),
+    });
+    const { run_id } = (await (await gateway.post(request('bounded-diagnostics'))).json()) as {
+      run_id: string;
+    };
+    await untilStatus(gateway, run_id, 'stopping');
+    gateway.reports.set('bounded-diagnostics', settled('bounded-diagnostics'));
+    await gateway.reconcileCompute();
+    const final = await untilStatus(gateway, run_id, 'completed');
+    expect(final.output.length).toBeLessThanOrEqual(8_000);
+    expect(final.output).toContain('[gpu_workspace workload:');
+    expect(final.output).toContain('[gpu_workspace final receipts:');
+    expect(final.output).toContain('[run accounting:');
+    expect(JSON.parse(final.output.match(/\[gpu_workspace outputs: (.*)\]\n/)[1])).toHaveLength(8);
+    expect(final.gpuCommands[0].stdout_tail).toHaveLength(2_000);
+    expect(final.gpuCommands[0].stderr_tail).toHaveLength(2_000);
+  });
+
+  it('preserves explicit cancellation while retaining the failed workload evidence', async () => {
+    const gateway = await boot({
+      workspaceOutcome: completedCommand({
+        exitCode: null,
+        timedOut: true,
+        outputs: [],
+        missing: ['report.json'],
+      }),
+      gpuCommand: async (opts) => {
+        await opts
+          .gpuRunner!.run(
+            { job_id: 'smoke-job', command: 'python embed.py', outputs: ['report.json'] },
+            opts.sandbox,
+          )
+          .catch(() => {});
+      },
+    });
+    const { run_id } = (await (await gateway.post(request('cancel-failed-command'))).json()) as {
+      run_id: string;
+    };
+    await untilStatus(gateway, run_id, 'stopping');
+    const stopped = await nativeFetch(`${gateway.origin}/v1/runs/${run_id}/stop`, {
+      method: 'POST',
+      headers: gateway.headers,
+    });
+    expect(stopped.status).toBe(200);
+    gateway.reports.set('cancel-failed-command', settled('cancel-failed-command'));
+    await gateway.reconcileCompute();
+    const final = await untilStatus(gateway, run_id, 'cancelled');
+    expect(final.gpuCommands[0]).toMatchObject({ status: 'failed', failure: 'timeout' });
+    expect(final.output).toContain('[gpu_workspace final receipts:');
+    expect(final.costUsd).toBe(0.13045);
+  });
+
   it('publishes GPU outputs as download links and reports a final metered receipt', async () => {
     const embeddings = Buffer.from(Array.from({ length: 2_048 }, (_, i) => i % 251));
     const report = Buffer.from('{"rows":1000,"gpu":"NVIDIA L40S"}');
@@ -506,6 +670,7 @@ describe('GPU gateway authorization and lifecycle', () => {
         exitCode: 0,
         timedOut: false,
         durationMs: 41_200,
+        timings: commandTimings,
         stdoutTail: 'embedded 1000 lines',
         stderrTail: '',
         outputs: [

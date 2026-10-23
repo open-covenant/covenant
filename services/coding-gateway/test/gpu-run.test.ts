@@ -4,7 +4,16 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ArtifactStore } from '../src/artifacts.js';
 import type { ComputeSession } from '../src/compute.js';
-import { GpuRunner, isGpuOutput, type GpuOutput } from '../src/gpu-run.js';
+import {
+  GpuRunner,
+  GpuWorkloadError,
+  gpuWorkloadSummary,
+  isGpuCommandOutcome,
+  isGpuOutput,
+  MAX_GPU_COMMANDS,
+  type GpuCommandOutcome,
+  type GpuOutput,
+} from '../src/gpu-run.js';
 import type { Sandbox } from '../src/types.js';
 
 const directories: string[] = [];
@@ -22,7 +31,9 @@ function setup(
     runDeadlineMs?: number;
     recorded?: number;
     files?: Record<string, string>;
-    exitAfterPolls?: number;
+    commands?: number;
+    failRecord?: boolean;
+    failOutputRecord?: boolean;
   } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'gpu-run-'));
@@ -39,6 +50,14 @@ function setup(
     durationSecs: 300,
   }));
   const recorded: GpuOutput[] = [];
+  const commands: GpuCommandOutcome[] = [];
+  const recordCommand = vi.fn((outcome: GpuCommandOutcome) => {
+    expect(isGpuCommandOutcome(outcome)).toBe(true);
+    const index = commands.findIndex((previous) => previous.id === outcome.id);
+    if (index < 0) commands.push(structuredClone(outcome));
+    else commands[index] = structuredClone(outcome);
+    if (options.failRecord) throw new Error('cannot persist command');
+  });
   const execute = vi.fn(async (code: string) => ({
     ok: true,
     stdout: code.includes('covenant-run.py')
@@ -67,7 +86,13 @@ function setup(
     signal: new AbortController().signal,
     runDeadlineMs: options.runDeadlineMs ?? NOW + 600_000,
     recorded: () => (options.recorded ?? 0) + recorded.length,
-    record: (outputs) => recorded.push(...outputs),
+    record: (outputs) => {
+      recorded.push(...outputs);
+      if (options.failOutputRecord) throw new Error('cannot persist outputs');
+    },
+    commands: () =>
+      options.commands ? Array.from({ length: options.commands }, () => commands[0]!) : commands,
+    recordCommand,
     connect,
     now: () => NOW,
     pollMs: 1,
@@ -83,6 +108,8 @@ function setup(
     connect,
     awaitRunning,
     recorded,
+    commands,
+    recordCommand,
   };
 }
 
@@ -106,6 +133,17 @@ describe('GpuRunner', () => {
       outputs: [{ path: 'report.json', bytes: 13, text: '{"rows":1000}' }],
       missing: [],
     });
+    expect(t.commands).toHaveLength(1);
+    expect(t.commands[0]).toMatchObject({
+      status: 'succeeded',
+      phase: 'complete',
+      exit_code: 0,
+      timed_out: false,
+      failure: null,
+      collected_outputs: ['report.json'],
+      timings: { readinessWaitMs: 0, commandBudgetMs: 255_000 },
+    });
+    expect(t.recordCommand.mock.calls[0]![0].status).toBe('pending');
     expect(t.recorded).toHaveLength(1);
     expect(isGpuOutput(t.recorded[0])).toBe(true);
     expect(t.recorded[0]!.url).toMatch(
@@ -120,7 +158,7 @@ describe('GpuRunner', () => {
     // Ready 250 s ago on a 300 s booking: 50 s left, minus the 45 s margin.
     const t = setup({ readySinceMs: NOW - 250_000 });
     await expect(t.runner.run(run({ files: [] }), t.sandbox)).rejects.toThrow(
-      /not enough booked GPU time/,
+      /GPU workload did not succeed/,
     );
     expect(t.connect).not.toHaveBeenCalled();
   });
@@ -128,7 +166,7 @@ describe('GpuRunner', () => {
   it('never lets a command outlive the run itself', async () => {
     const t = setup({ runDeadlineMs: NOW + 60_000 });
     await expect(t.runner.run(run({ files: [] }), t.sandbox)).rejects.toThrow(
-      /not enough booked GPU time/,
+      /GPU workload did not succeed/,
     );
   });
 
@@ -149,6 +187,85 @@ describe('GpuRunner', () => {
   it('caps outputs across every command in the run', async () => {
     const t = setup({ recorded: 8 });
     await expect(t.runner.run(run({ files: [] }), t.sandbox)).rejects.toThrow(/at most 8 output/);
+  });
+
+  it('persists pending evidence before remote execution and retains the last phase on failure', async () => {
+    const t = setup();
+    t.client.execute.mockImplementation(async () => {
+      expect(t.commands[0]).toMatchObject({ status: 'pending', phase: 'executing' });
+      throw new Error(`transport rejected ${ACCESS_URL}`);
+    });
+    const error = await t.runner.run(run(), t.sandbox).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(GpuWorkloadError);
+    expect((error as GpuWorkloadError).toolResult).not.toContain(ACCESS_URL);
+    expect(t.commands[0]).toMatchObject({
+      status: 'failed',
+      phase: 'executing',
+      failure: 'execution_error',
+      timings: { readinessWaitMs: 0, workspaceReadyWaitMs: 0, stagingMs: 0 },
+    });
+    expect(t.client.close).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed if artifact persistence fails after a successful remote command', async () => {
+    const t = setup({ failOutputRecord: true });
+    await expect(t.runner.run(run(), t.sandbox)).rejects.toBeInstanceOf(GpuWorkloadError);
+    expect(t.commands[0]).toMatchObject({
+      status: 'failed',
+      phase: 'complete',
+      failure: 'execution_error',
+      exit_code: 0,
+      timed_out: false,
+      stdout_tail: 'ok',
+      timings: { commandElapsedMs: 0 },
+    });
+    expect(gpuWorkloadSummary(t.commands).status).toBe('failed');
+  });
+
+  it('does not execute if pending evidence could not be persisted', async () => {
+    const t = setup({ failRecord: true });
+    await expect(t.runner.run(run(), t.sandbox)).rejects.toThrow('cannot persist command');
+    expect(t.awaitRunning).not.toHaveBeenCalled();
+    expect(t.commands[0]?.status).toBe('pending');
+    expect(gpuWorkloadSummary(t.commands).status).toBe('failed');
+  });
+
+  it('redacts workspace credentials from bounded durable and tool log tails', async () => {
+    const t = setup();
+    t.client.execute.mockImplementation(async (code) => ({
+      ok: true,
+      stdout: code.includes('covenant-run.py')
+        ? '__covenant__{"pid":1}'
+        : `__covenant__${JSON.stringify({ stdout: 'x'.repeat(3_000) + ACCESS_URL, stderr: 't'.repeat(32), sizes: { 'report.json': 13 } })}`,
+    }));
+    const result = JSON.parse(await t.runner.run(run(), t.sandbox));
+    expect(result.stdout_tail).toHaveLength(2_000);
+    expect(result.stdout_tail).not.toContain(ACCESS_URL);
+    expect(result.stderr_tail).not.toContain('t'.repeat(32));
+    expect(t.commands[0]?.stdout_tail).toBe(result.stdout_tail);
+    expect(t.commands[0]?.stderr_tail).toBe(result.stderr_tail);
+  });
+
+  it('bounds durable command history before another provider command', async () => {
+    const t = setup({ commands: MAX_GPU_COMMANDS });
+    await expect(t.runner.run(run(), t.sandbox)).rejects.toThrow(/at most 32 GPU commands/);
+    expect(t.awaitRunning).not.toHaveBeenCalled();
+  });
+
+  it('keeps an earlier failed attempt visible after a later successful command', async () => {
+    const t = setup();
+    t.client.download.mockImplementationOnce(async () =>
+      Buffer.from('{"exit_code":2,"duration_ms":900}'),
+    );
+    await expect(t.runner.run(run(), t.sandbox)).rejects.toBeInstanceOf(GpuWorkloadError);
+    await t.runner.run(run(), t.sandbox);
+    expect(t.commands.map((command) => command.status)).toEqual(['failed', 'succeeded']);
+    expect(gpuWorkloadSummary(t.commands)).toMatchObject({
+      status: 'failed',
+      commands: 2,
+      failed: 1,
+      failures: ['nonzero_exit'],
+    });
   });
 
   it('limits the size of files copied to the GPU', async () => {

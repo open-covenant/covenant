@@ -11,6 +11,7 @@ import {
   withTurnCache,
 } from '../src/backends/anthropic.js';
 import { ComputeSession, type ComputeConfig, type ComputeCleanupReport } from '../src/compute.js';
+import { GpuWorkloadError, type GpuRunner } from '../src/gpu-run.js';
 import { isolatedShellCommand } from '../src/sandbox-command.js';
 import { config, PRICING } from '../src/config.js';
 import type { CodingBackend, GatewayEvent, Sandbox } from '../src/types.js';
@@ -565,6 +566,58 @@ describe('Anthropic per-run consent and accounting', () => {
     expect(charge).not.toHaveBeenCalled();
     expect(events.some((event) => event.type.startsWith('run.'))).toBe(false);
     expect(record).toHaveBeenCalledTimes(2);
+  });
+
+  it('surfaces structured GPU failures as failed tools while retaining normal model usage', async () => {
+    const fake = fakeClient([
+      modelMessage({
+        content: [
+          {
+            type: 'tool_use',
+            id: 'run-gpu',
+            name: 'gpu_workspace',
+            input: {
+              action: 'run',
+              job_id: 'job-1',
+              command: 'python embed.py',
+              outputs: ['report.json'],
+            },
+          } as Anthropic.ToolUseBlock,
+        ],
+        stop_reason: 'tool_use',
+      }),
+      modelMessage(),
+    ]);
+    const diagnostic = JSON.stringify({
+      job_id: 'job-1',
+      exit_code: null,
+      timed_out: true,
+      missing: ['report.json'],
+    });
+    const gpuRunner = {
+      run: vi.fn(async () => {
+        throw new GpuWorkloadError(diagnostic);
+      }),
+    } as unknown as GpuRunner;
+    const events: GatewayEvent[] = [];
+    const result = await new AnthropicBackend(undefined, fake.client).run(
+      runOptions({
+        gpuRunner,
+        computeSession: new ComputeSession(COMPUTE_CFG),
+        computeConfig: COMPUTE_CFG,
+        emit: (event) => events.push(event),
+      }),
+    );
+    expect(gpuRunner.run).toHaveBeenCalledOnce();
+    const messages = fake.stream.mock.calls[1]![0].messages;
+    expect(messages.at(-1)?.content).toMatchObject([
+      { type: 'tool_result', tool_use_id: 'run-gpu', content: diagnostic, is_error: true },
+    ]);
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'tool.completed', tool: 'gpu_workspace', error: true }),
+    );
+    expect(result.usage).toMatchObject({ inputTokens: 200, outputTokens: 20 });
+    expect(result.output).toBe('done');
   });
 
   it('rejects partial GPU injection before any provider request', async () => {

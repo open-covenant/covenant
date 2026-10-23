@@ -10,7 +10,7 @@
  */
 
 import type { ComputeCleanupReport, ComputeConfig, ComputeSession } from './compute.js';
-import type { GpuRunner } from './gpu-run.js';
+import type { GpuRunner, GpuCommandOutcome } from './gpu-run.js';
 
 export interface GpuPolicy {
   max_usdc_micros: 200000;
@@ -52,6 +52,7 @@ export interface RunState {
   costUsd?: number;
   providerReceipts?: ProviderReceipt[];
   compute?: ComputeCleanupReport;
+  gpuCommands?: GpuCommandOutcome[];
 }
 
 /** GET /v1/capabilities: the three features the daemon gates on plus the
@@ -77,7 +78,7 @@ export type GatewayEvent =
   | { type: 'reasoning.available'; text: string }
   | { type: 'approval.request'; choices: string[] }
   | { type: 'run.completed'; output: string }
-  | { type: 'run.failed'; error: string };
+  | { type: 'run.failed'; error: string; output?: string };
 
 // Pluggable coding backend.
 // Anthropic and OpenAI adapters implement this; selected per run.

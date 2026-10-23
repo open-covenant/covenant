@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { GpuCommandOutcome } from '../src/gpu-run.js';
 import { IdempotencyConflictError, RunStore, type StoredRun } from '../src/run-store.js';
 
 const directories: string[] = [];
@@ -90,6 +91,72 @@ describe('RunStore', () => {
     expect(restored).toMatchObject({ status: 'stopping', desiredStatus: 'failed', costUsd: 0.5 });
     expect(restored?.events.some((e) => e.type === 'run.failed')).toBe(false);
     expect(new RunStore(path).findSession('gpu-session')?.status).toBe('stopping');
+  });
+
+  it.each(['pending', 'failed'] as const)(
+    'preserves %s command evidence and existing financial fields across restart',
+    (status) => {
+      const path = storePath();
+      const command = commandOutcome({
+        status,
+        ...(status === 'failed' ? { failure: 'execution_error' } : {}),
+      });
+      const stored = run({
+        status: 'stopping',
+        desiredStatus: 'completed',
+        sessionId: 'gpu-session',
+        requestFingerprint: 'b'.repeat(64),
+        reservationId: 'r',
+        reservedMax: 0.5,
+        nonComputeUsd: 0.12045,
+        gpu: { max_usdc_micros: 200000, duration_secs: 300, max_launches: 1 },
+        gpuCommands: [command],
+      });
+      new RunStore(path).save(stored);
+      expect(new RunStore(path).list()[0]).toMatchObject({
+        status: 'stopping',
+        desiredStatus: 'failed',
+        reservedMax: 0.5,
+        nonComputeUsd: 0.12045,
+        gpuCommands: [command],
+      });
+    },
+  );
+
+  it.each([
+    {
+      status: 'succeeded',
+      phase: 'complete',
+      exit_code: null,
+      timed_out: false,
+      collected_outputs: ['report.json'],
+    },
+    { status: 'succeeded', phase: 'complete', exit_code: 0, timed_out: false },
+    {
+      status: 'succeeded',
+      phase: 'complete',
+      exit_code: 0,
+      timed_out: true,
+      collected_outputs: ['report.json'],
+    },
+    { status: 'failed', failure: 'invented_failure' },
+    { stdout_tail: 'x'.repeat(2001) },
+    { phase: 'invented_phase' },
+    { timings: { readinessWaitMs: -1 } },
+  ])('rejects invalid or fabricated workload evidence %j', (patch) => {
+    const path = storePath();
+    writeFileSync(
+      path,
+      JSON.stringify([
+        run({
+          sessionId: 'gpu-session',
+          requestFingerprint: 'b'.repeat(64),
+          gpu: { max_usdc_micros: 200000, duration_secs: 300, max_launches: 1 },
+          gpuCommands: [{ ...commandOutcome(), ...patch } as GpuCommandOutcome],
+        }),
+      ]),
+    );
+    expect(() => new RunStore(path)).toThrow(/invalid records/);
   });
 
   it('rejects a forged receipt that does not balance the booked maximum', () => {
@@ -332,6 +399,33 @@ function run(patch: Partial<StoredRun>): StoredRun {
     status: 'failed',
     events: [],
     updatedAt: '2026-08-22T00:00:00.000Z',
+    ...patch,
+  };
+}
+
+function commandOutcome(patch: Partial<GpuCommandOutcome> = {}): GpuCommandOutcome {
+  return {
+    id: '00000000-0000-0000-0000-000000000001',
+    job_id: 'job-1',
+    status: 'pending',
+    phase: 'executing',
+    exit_code: null,
+    timed_out: null,
+    requested_outputs: ['report.json'],
+    collected_outputs: [],
+    missing_outputs: [],
+    oversized_outputs: [],
+    failure: null,
+    timings: {
+      readinessWaitMs: 10,
+      workspaceReadyWaitMs: 20,
+      stagingMs: 30,
+      commandBudgetMs: 250000,
+      commandElapsedMs: null,
+      collectionMs: null,
+    },
+    stdout_tail: '',
+    stderr_tail: '',
     ...patch,
   };
 }

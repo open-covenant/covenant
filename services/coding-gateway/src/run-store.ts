@@ -23,7 +23,13 @@ import type { GpuPolicy } from './types.js';
 import type { ComputeCleanupReport } from './compute.js';
 import { parseGpuPolicy } from './gpu-policy.js';
 import { validAccountingBasis, type RunAccountingBasis } from './run-accounting.js';
-import { isGpuOutput, type GpuOutput } from './gpu-run.js';
+import {
+  isGpuOutput,
+  type GpuOutput,
+  isGpuCommandOutcome,
+  MAX_GPU_COMMANDS,
+  type GpuCommandOutcome,
+} from './gpu-run.js';
 import { MAX_OUTPUT_FILES } from './workspace-exec.js';
 
 export interface StoredRun {
@@ -50,6 +56,7 @@ export interface StoredRun {
   nonComputeUsd?: number;
   accountingBasis?: RunAccountingBasis;
   gpuOutputs?: GpuOutput[];
+  gpuCommands?: GpuCommandOutcome[];
   updatedAt: string;
 }
 
@@ -254,6 +261,15 @@ function isStoredRun(value: unknown): value is StoredRun {
   if (run.compute !== undefined && (!run.gpu || !validCleanupReport(run.compute, run.sessionId!)))
     return false;
   if (run.accountingBasis !== undefined && !validAccountingBasis(run.accountingBasis)) return false;
+  if (
+    run.gpuCommands !== undefined &&
+    (!run.gpu ||
+      !Array.isArray(run.gpuCommands) ||
+      run.gpuCommands.length > MAX_GPU_COMMANDS ||
+      !run.gpuCommands.every(isGpuCommandOutcome) ||
+      new Set(run.gpuCommands.map((command) => command.id)).size !== run.gpuCommands.length)
+  )
+    return false;
   if (
     run.gpuOutputs !== undefined &&
     (!run.gpu ||

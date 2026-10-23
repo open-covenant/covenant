@@ -1,0 +1,254 @@
+{
+  "schema": 1,
+  "artifacts": {
+    "coordinator": {
+      "accepted": true,
+      "source_sha": "5f0f006aaca4150a79f5fb56f8b5f25ba3eacdf9",
+      "repository": "ghcr.io/open-covenant/covenant/compute-coordinator-public",
+      "anonymous": true,
+      "started_at": "2026-10-19T00:50:20.078429+00:00",
+      "manifest_digest": "sha256:e702d919cb16c91d190398e28906052962ae963452f314024534c38738d93637",
+      "config": {
+        "digest": "sha256:491e969d4598097728cb1622bc5705808a341a437d1dfd92de0d8849145da057",
+        "bytes": 5448,
+        "revision": "5f0f006aaca4150a79f5fb56f8b5f25ba3eacdf9",
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "layers": [
+        {
+          "digest": "sha256:7fd1ebe418b5079d4aa36f416af9b143d127bc75b0155d71cb5fd559b5e04d39",
+          "bytes": 28249323,
+          "verified": true
+        },
+        {
+          "digest": "sha256:dfbab432a7d6474469523370e9d6b025796b292b99f1d05551e8b9435b8be214",
+          "bytes": 20171704,
+          "verified": true
+        },
+        {
+          "digest": "sha256:59bc2931fc8ce767c8982b1d38719c8a6b04eef2e890405f7c633b5e7834f340",
+          "bytes": 3327,
+          "verified": true
+        },
+        {
+          "digest": "sha256:576a9bad5b728c7faeb5d99f76fae574c5f85f185b7decfffd4ce617b408e835",
+          "bytes": 1139,
+          "verified": true
+        },
+        {
+          "digest": "sha256:c50fc4853d48b880281d0597a0abd4a65e4d77099b878a61e0316ad79ef5fbe7",
+          "bytes": 6440412,
+          "verified": true
+        },
+        {
+          "digest": "sha256:a0e79087e11afc92e3e6271105a407325aeb7e71de7b0e46e6ee0296279f157c",
+          "bytes": 2748835,
+          "verified": true
+        },
+        {
+          "digest": "sha256:599158467eb51fd52da7dc3c60a4c8f56ee430390be08ad709857355930ca56c",
+          "bytes": 2448782,
+          "verified": true
+        },
+        {
+          "digest": "sha256:0b4d964164dca3d04b1bcdada2471e1a4d8584fb3c0ec6fec11022201228f07d",
+          "bytes": 2238793,
+          "verified": true
+        },
+        {
+          "digest": "sha256:16e2ffcf6875df08e1e7b347beaa8701599425dab9356c09134d7e4bda7dd790",
+          "bytes": 1013,
+          "verified": true
+        },
+        {
+          "digest": "sha256:1f745f24b041a7f81e637bf1c9d726bc80927056857c4a5d8004d306f56fa12b",
+          "bytes": 6686,
+          "verified": true
+        },
+        {
+          "digest": "sha256:d15cb8f8e1cd7fde274b5c5600213ebc289290d1a686aa82a6babd6a5b6c9ab4",
+          "bytes": 676,
+          "verified": true
+        },
+        {
+          "digest": "sha256:72271c57e948f362048c8e51c8876fe2154891f4db9618cc99c7b254da1c1cac",
+          "bytes": 24962,
+          "verified": true
+        },
+        {
+          "digest": "sha256:baf03fc77b36b3d2fb5536a93745069afb36ccf6303c4b89d1ce91e3b2b1b726",
+          "bytes": 96,
+          "verified": true
+        }
+      ],
+      "total_layer_bytes": 62335748,
+      "completed_at": "2026-10-19T00:50:27.963696+00:00",
+      "scope": "Anonymous manifest, config and every layer were downloaded and hash-verified; this alone does not prove live service operation."
+    },
+    "broker": {
+      "accepted": true,
+      "source_sha": "8ee0a9c48ec68d475065612d439bd24a37751ebc",
+      "repository": "ghcr.io/open-covenant/covenant/compute-node-public",
+      "anonymous": true,
+      "started_at": "2026-10-18T23:54:41.384167+00:00",
+      "manifest_digest": "sha256:7b17bc68f85735a8216b3a6ba92efe548b984274a7baf5d2fb0c629074bab9e8",
+      "config": {
+        "digest": "sha256:aa83593e7d7a22b1be499ba05c087b21654b38e85be4553959988e0454efd8eb",
+        "bytes": 2334,
+        "revision": "8ee0a9c48ec68d475065612d439bd24a37751ebc",
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "layers": [
+        {
+          "digest": "sha256:7fd1ebe418b5079d4aa36f416af9b143d127bc75b0155d71cb5fd559b5e04d39",
+          "bytes": 28249323,
+          "verified": true
+        },
+        {
+          "digest": "sha256:167f79a8cc78d59340ad2a22fb1aad1a4e4cb07076d71c3992e2279cbcc75be7",
+          "bytes": 3332321,
+          "verified": true
+        },
+        {
+          "digest": "sha256:fe1b862409827a97ab669a017ee6947f4b78b56da47a90aa68a68072378547a3",
+          "bytes": 3320,
+          "verified": true
+        },
+        {
+          "digest": "sha256:89ef28072a6e4b6229ffc43f8aababfbfa96b9b1600cee6173b6243600b4670a",
+          "bytes": 5818672,
+          "verified": true
+        },
+        {
+          "digest": "sha256:40b342227e5d11fcc4bb24c2b0f04e5840fcffe74ebc19d061b4afc238005ea4",
+          "bytes": 674,
+          "verified": true
+        },
+        {
+          "digest": "sha256:83e1d03c4956345daa9096d0cc6b3cafc9c7c6743c65cc1fcf7022e32dd07d98",
+          "bytes": 96,
+          "verified": true
+        }
+      ],
+      "total_layer_bytes": 37404406,
+      "completed_at": "2026-10-18T23:54:45.348993+00:00",
+      "scope": "Anonymous manifest, config and every layer were downloaded and hash-verified; this alone does not prove live service operation."
+    },
+    "external_observer": {
+      "accepted": true,
+      "source_sha": "1bb226f0404d49f852a726154a13e91f16437422",
+      "repository": "ghcr.io/open-covenant/covenant/compute-node-public",
+      "anonymous": true,
+      "started_at": "2026-10-19T00:03:32.001538+00:00",
+      "manifest_digest": "sha256:d95c659e209829640c67ff7930fcfd66b2bd330c5e8c50f2542e6e155114a1ac",
+      "config": {
+        "digest": "sha256:6b7ef118eb057586affed2f262d553012a78db5828b4a18534f1e36cc1394b2f",
+        "bytes": 11817,
+        "revision": "1bb226f0404d49f852a726154a13e91f16437422",
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "layers": [
+        {
+          "digest": "sha256:a8ac7f6c67abc236e4c745052c404112b8fab6fe8ac3a329d1ef3b867ad67c71",
+          "bytes": 28232655,
+          "verified": true
+        },
+        {
+          "digest": "sha256:013634040cec61eda7919c9682291bc50456a54539f410ef5233821fb9a8c4d9",
+          "bytes": 3318,
+          "verified": true
+        },
+        {
+          "digest": "sha256:a82db95c01928dce3a29c0d23bcd2588dafeba6f24ae23115195e3e3d6cc5437",
+          "bytes": 50779298,
+          "verified": true
+        },
+        {
+          "digest": "sha256:9803e0ff8c3d881aa142790ec91f17a1a6fa25189d082c58f4e66cbba4253b66",
+          "bytes": 1713026,
+          "verified": true
+        },
+        {
+          "digest": "sha256:2254049a7d7763ea7d56bf06d9a6d5cb882d88b136a84c18c254ead00ac5c874",
+          "bytes": 448,
+          "verified": true
+        },
+        {
+          "digest": "sha256:5815ea6dfe3cbf9982be6ac1be994e9c595f3f4a154e77eb18916559aa1d6b0a",
+          "bytes": 3533621,
+          "verified": true
+        },
+        {
+          "digest": "sha256:7fb97bcf2efaf760a195ba2a503d5179098c553fe8556d7e2aa124da9d465716",
+          "bytes": 114,
+          "verified": true
+        },
+        {
+          "digest": "sha256:903432f87ebe569b218a557a425de7012b1e9b91a38d642e2f318cd34d78e21b",
+          "bytes": 9478,
+          "verified": true
+        },
+        {
+          "digest": "sha256:78556e1ba22a35e07cab4f412384d4823ac94d32a57c67efdd30a064a3786de0",
+          "bytes": 12185914,
+          "verified": true
+        },
+        {
+          "digest": "sha256:631e4efe147ef3c9eef461bd8e3f7ccf6120ead7b0f227a9b639a63dc33c62f5",
+          "bytes": 6148,
+          "verified": true
+        },
+        {
+          "digest": "sha256:5c4d154d1816b90228a1287f1e85d7f9031f88b0fe32032c52383aa0b93a8a21",
+          "bytes": 14235,
+          "verified": true
+        },
+        {
+          "digest": "sha256:ac4721c5eae3af3abe7a96000b21400df787a8d51a429d5ea8a1a25dd06c1bb7",
+          "bytes": 3185480,
+          "verified": true
+        },
+        {
+          "digest": "sha256:4fe00693568483d932fd27e697f4cebc0c3205630602ae23f98ff7bb021365be",
+          "bytes": 5537717,
+          "verified": true
+        },
+        {
+          "digest": "sha256:46daa470f4227e52c9c2c3da6acd8dff7871b7cc76ed6b1e74756cc9a90b0ab8",
+          "bytes": 16313,
+          "verified": true
+        },
+        {
+          "digest": "sha256:6a0ec08c3d5828d5055a26412b7c916fb87dbd5dc49871856c252aa5c41a631d",
+          "bytes": 95,
+          "verified": true
+        },
+        {
+          "digest": "sha256:10806f5a129b0f37400c9119e9a48dc5925a214862a538bccbbf90fa274dff1e",
+          "bytes": 5749,
+          "verified": true
+        },
+        {
+          "digest": "sha256:7889d3e361d639634a83611e1fdccba086cd6c8bfacd7e74bfe7b526411537e8",
+          "bytes": 2177,
+          "verified": true
+        }
+      ],
+      "total_layer_bytes": 105225786,
+      "completed_at": "2026-10-19T00:03:42.432857+00:00",
+      "scope": "Anonymous manifest, config and every layer were downloaded and hash-verified; this alone does not prove live service operation.",
+      "base_image_digest": "sha256:aef10b2661b20d35202ffdbc68ab3efb249c8e9f45c9c2953eccfa69cf5f3882",
+      "runtime_revision": "e52e2a790e1dbabf9a7e5018cdca99e82cdcea9e",
+      "preserved_base_layers": 15,
+      "watchdog_only_overlay": true,
+      "overlay_files": {
+        "opt/covenant/deploy/compute-canary-watchdog.mjs": "f5099026f47b9f0fecb7fce1f0b6f6680115fd327e06d138499d6aa323f7c859",
+        "opt/covenant/deploy/compute-x402/supervisor.mjs": "9c959e6f133d809e3bf342f8d3f9e5ca25188016ffd95bd5cf16c594e606d170"
+      },
+      "runtime_config_preserved": true
+    }
+  }
+}

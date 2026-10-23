@@ -1,0 +1,38 @@
+{
+  "schema": "covenant-canary-copied-restart-v1",
+  "accepted": true,
+  "charged_micro_usdc": 17766,
+  "copies_unchanged": true,
+  "originals_unchanged": true,
+  "job_id": "1e8517f4-737e-470b-80c6-5f83e0ba1003",
+  "run_id": "74499d51-acd1-450d-bbec-5f97b4fe7b61",
+  "observed_at_unix": 1792372198,
+  "reserved_window": 82980,
+  "resolved_count": 2,
+  "unresolved_count": 0,
+  "source_revision": "5f0f006aaca4150a79f5fb56f8b5f25ba3eacdf9",
+  "supervisor_sha256": "7dfefcbe6ea694ec183857d7f7de98cefbabc750bbde1857cc614d3c3503413e",
+  "scope": "copied supervisor admission replay; bootstrap, process creation, network and monitoring mocked",
+  "replays": [
+    {
+      "admission_action": null,
+      "loop_iterations": 3,
+      "mode": "once",
+      "monitor_stubs": 1,
+      "paid_dispatches": 0,
+      "real_child_processes": 0,
+      "real_network_calls": 0,
+      "recovery_dispatches": 0
+    },
+    {
+      "admission_action": null,
+      "loop_iterations": 3,
+      "mode": "scheduled",
+      "monitor_stubs": 1,
+      "paid_dispatches": 0,
+      "real_child_processes": 0,
+      "real_network_calls": 0,
+      "recovery_dispatches": 0
+    }
+  ]
+}

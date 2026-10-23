@@ -153,6 +153,43 @@ describe('runWorkspaceJob', () => {
     expect(workspace.executed).toEqual(['start', 'kill', 'collect']);
   });
 
+  it('separates workspace readiness, staging, command and collection time', async () => {
+    let clock = 0;
+    const workspace = fakeWorkspace({ exitAfterPolls: 1, produce: { 'report.json': Buffer.from('{}') } });
+    workspace.client.waitUntilServing.mockImplementation(async () => { clock += 100; });
+    workspace.client.makeDirectory.mockImplementation(async () => { clock += 25; });
+    workspace.client.upload.mockImplementation(async () => { clock += 40; });
+    const execute = workspace.client.execute.getMockImplementation()!;
+    workspace.client.execute.mockImplementation(async (code) => {
+      clock += code.includes('covenant-run.py') ? 10 : 30;
+      return execute(code);
+    });
+    const download = workspace.client.download.getMockImplementation()!;
+    workspace.client.download.mockImplementation(async (path) => {
+      clock += path.endsWith('covenant-exit.json') ? 50 : 20;
+      return download(path);
+    });
+    const outcome = await runWorkspaceJob(workspace.client, {
+      command: 'python3 embed.py', files: [], outputs: ['report.json'], deadlineMs: 1_000,
+    }, { now: () => clock, pollMs: 1 });
+    expect(outcome.timings).toEqual({
+      workspaceReadyWaitMs: 100, stagingMs: 130, commandBudgetMs: 770,
+      commandElapsedMs: 60, collectionMs: 50,
+    });
+    // Process-reported duration is a separate observation, not the tool's wall time.
+    expect(outcome.durationMs).toBe(1234);
+  });
+
+  it('does not start a command when staging consumed the remaining booking window', async () => {
+    let clock = 0;
+    const workspace = fakeWorkspace({});
+    workspace.client.upload.mockImplementation(async () => { clock += 60; });
+    await expect(runWorkspaceJob(workspace.client, {
+      command: 'python3 embed.py', files: [], outputs: [], deadlineMs: 100,
+    }, { now: () => clock })).rejects.toThrow(/deadline elapsed before execution/);
+    expect(workspace.executed).toEqual([]);
+  });
+
   it('stops the command and fails when the run is aborted', async () => {
     const workspace = fakeWorkspace({});
     const abort = new AbortController();

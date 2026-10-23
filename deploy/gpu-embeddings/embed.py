@@ -28,6 +28,17 @@ MAX_LINES = 10_000
 MAX_INPUT_BYTES = 4 * 1024 * 1024
 MAX_TOKENS = 512
 BATCH = 128
+STARTED_AT = time.monotonic()
+
+
+def phase(name, **fields):
+    """Flush fixed phase names and numeric progress, never input text or URLs."""
+    print(
+        "[covenant-embedding] "
+        + json.dumps({"phase": name, "elapsed_secs": round(time.monotonic() - STARTED_AT, 3), **fields}),
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def fetch(url, limit):
@@ -42,11 +53,13 @@ def model_file(name):
     """Downloads a pinned model file once and refuses it if its hash differs."""
     path = os.path.join("model", name)
     if not os.path.exists(path):
+        phase("download_" + name.replace("/", "_"))
         os.makedirs(os.path.dirname(path), exist_ok=True)
         url = f"https://huggingface.co/{MODEL}/resolve/{REVISION}/{name}"
         data = fetch(url, 512 * 1024 * 1024)
         with open(path, "wb") as f:
             f.write(data)
+        phase("download_complete_" + name.replace("/", "_"), bytes=len(data))
     with open(path, "rb") as f:
         digest = hashlib.sha256(f.read()).hexdigest()
     if digest != FILES[name]:
@@ -62,18 +75,23 @@ def split_lines(raw):
 
 
 def embed(lines, providers):
+    phase("import_runtime")
     import numpy as np
     import onnxruntime as ort
     from tokenizers import Tokenizer
 
+    phase("load_tokenizer")
     tokenizer = Tokenizer.from_file(model_file("tokenizer.json"))
     tokenizer.enable_truncation(max_length=MAX_TOKENS)
     tokenizer.enable_padding(pad_id=0, pad_token="[PAD]")
-    session = ort.InferenceSession(model_file("onnx/model.onnx"), providers=providers)
+    model_path = model_file("onnx/model.onnx")
+    phase("initialize_inference_session")
+    session = ort.InferenceSession(model_path, providers=providers)
     if session.get_providers()[0] != providers[0]:
         raise SystemExit(f"{providers[0]} is unavailable; got {session.get_providers()}")
     names = {i.name for i in session.get_inputs()}
     rows = []
+    phase("embed_batches", rows=len(lines), batch_size=BATCH)
     for start in range(0, len(lines), BATCH):
         encoded = tokenizer.encode_batch(lines[start : start + BATCH])
         ids = np.array([e.ids for e in encoded], dtype=np.int64)
@@ -86,6 +104,7 @@ def embed(lines, providers):
         # bge pools the [CLS] token, then normalizes.
         cls = session.run(None, feed)[0][:, 0, :]
         rows.append(cls / np.linalg.norm(cls, axis=1, keepdims=True))
+        phase("batch_complete", rows=min(start + BATCH, len(lines)), total_rows=len(lines))
     return np.concatenate(rows).astype(np.float32), session
 
 
@@ -100,6 +119,7 @@ def nvidia_smi(*query):
 
 
 def main():
+    phase("import_main")
     import numpy as np
     import onnxruntime as ort
 
@@ -109,12 +129,15 @@ def main():
     timings = {}
 
     started = time.monotonic()
+    phase("download_input")
     raw = fetch(url, MAX_INPUT_BYTES)
     lines = split_lines(raw)
     if not 1 <= len(lines) <= MAX_LINES:
         raise SystemExit(f"expected 1 to {MAX_LINES} lines, got {len(lines)}")
     timings["download_input"] = time.monotonic() - started
+    phase("input_ready", rows=len(lines), bytes=len(raw))
 
+    phase("inspect_gpu")
     before = int(nvidia_smi("--query-gpu=memory.used")[0][0])
     started = time.monotonic()
     embeddings, session = embed(lines, ["CUDAExecutionProvider"])
@@ -123,6 +146,7 @@ def main():
     # hide host PIDs from nvidia-smi, hence whole-device figures.
     during = int(nvidia_smi("--query-gpu=memory.used")[0][0])
 
+    phase("write_outputs")
     np.save("embeddings.npy", embeddings)
     with open("embeddings.npy", "rb") as f:
         embeddings_sha256 = hashlib.sha256(f.read()).hexdigest()
@@ -147,6 +171,7 @@ def main():
     }
     with open("report.json", "w") as f:
         json.dump(report, f, indent=1)
+    phase("complete", rows=int(embeddings.shape[0]))
     print(json.dumps(report))
 
 

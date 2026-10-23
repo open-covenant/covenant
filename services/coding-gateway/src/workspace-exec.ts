@@ -491,6 +491,19 @@ export interface WorkspaceJobSpec {
   deadlineMs: number;
 }
 
+export interface WorkspaceJobTimings {
+  workspaceReadyWaitMs: number;
+  stagingMs: number;
+  commandBudgetMs: number;
+  commandElapsedMs: number;
+  collectionMs: number;
+}
+
+export interface WorkspaceJobProgress {
+  phase: 'waiting_for_workspace' | 'staging' | 'executing' | 'stopping' | 'collecting' | 'complete';
+  timings: Partial<WorkspaceJobTimings>;
+}
+
 export interface WorkspaceJobOutcome {
   exitCode: number | null;
   timedOut: boolean;
@@ -500,6 +513,8 @@ export interface WorkspaceJobOutcome {
   outputs: Array<{ path: string; bytes: Buffer }>;
   missing: string[];
   skipped: string[];
+  /** Gateway wall-clock phases; none of these is a provider billing interval. */
+  timings: WorkspaceJobTimings;
 }
 
 export async function runWorkspaceJob(
@@ -508,26 +523,57 @@ export async function runWorkspaceJob(
     'waitUntilServing' | 'makeDirectory' | 'upload' | 'download' | 'execute'
   >,
   spec: WorkspaceJobSpec,
-  options: { signal?: AbortSignal; now?: () => number; pollMs?: number } = {},
+  options: {
+    signal?: AbortSignal;
+    now?: () => number;
+    pollMs?: number;
+    onProgress?: (progress: WorkspaceJobProgress) => void;
+  } = {},
 ): Promise<WorkspaceJobOutcome> {
   const now = options.now ?? Date.now;
+  const enteredAt = now();
   const id = randomUUID();
   const dir = `${JOB_ROOT}/${id}`;
+  const assertCanStart = () => {
+    if (options.signal?.aborted || now() >= spec.deadlineMs)
+      throw new WorkspaceError('GPU command deadline elapsed before execution could start');
+  };
+  options.onProgress?.({ phase: 'waiting_for_workspace', timings: {} });
+  assertCanStart();
   await client.waitUntilServing(Math.min(now() + SERVING_WAIT_MS, spec.deadlineMs), {
     signal: options.signal,
   });
+  const servingAt = now();
+  const workspaceReadyWaitMs = Math.max(0, servingAt - enteredAt);
+  options.onProgress?.({ phase: 'staging', timings: { workspaceReadyWaitMs } });
+  assertCanStart();
   await client.makeDirectory(JOB_ROOT);
+  assertCanStart();
   await client.makeDirectory(dir);
   for (const file of spec.files) {
     const parts = file.path.split('/');
-    for (let i = 1; i < parts.length; i++)
+    for (let i = 1; i < parts.length; i++) {
+      assertCanStart();
       await client.makeDirectory(`${dir}/${parts.slice(0, i).join('/')}`);
+    }
+    assertCanStart();
     await client.upload(`${dir}/${file.path}`, file.bytes);
   }
+  assertCanStart();
   await client.upload(`${dir}/covenant-command.sh`, Buffer.from(`${spec.command}\n`));
+  assertCanStart();
   await client.upload(`${dir}/covenant-run.py`, Buffer.from(RUN_SCRIPT));
 
   const startedAt = now();
+  // Jupyter startup and uploads consume the same bounded command window. Do
+  // not start paid work after staging has already exhausted that window.
+  assertCanStart();
+  const stagingMs = Math.max(0, startedAt - servingAt);
+  const commandBudgetMs = Math.max(0, spec.deadlineMs - startedAt);
+  options.onProgress?.({
+    phase: 'executing', timings: { workspaceReadyWaitMs, stagingMs, commandBudgetMs },
+  });
+  assertCanStart();
   marked(await client.execute(startCode(dir, id), dir), 'start');
 
   let exit: { exit_code?: unknown; duration_ms?: unknown } | null = null;
@@ -538,15 +584,23 @@ export async function runWorkspaceJob(
     await delay(Math.min(options.pollMs ?? POLL_INTERVAL_MS, remaining), undefined, {
       signal: options.signal,
     }).catch(() => undefined);
+    if (options.signal?.aborted || now() >= spec.deadlineMs) break;
     const raw = await client.download(`${dir}/covenant-exit.json`);
     if (raw) exit = parseExit(raw);
   }
   if (!exit) {
+    options.onProgress?.({
+      phase: 'stopping', timings: { commandElapsedMs: Math.max(0, now() - startedAt) },
+    });
     // The process group was started in its own session; stop all of it.
     marked(await client.execute(killCode(dir, id), dir), 'stop');
     if (options.signal?.aborted)
       throw new WorkspaceError('run aborted while the GPU command was running');
   }
+
+  const collectingAt = now();
+  const commandElapsedMs = Math.max(0, collectingAt - startedAt);
+  options.onProgress?.({ phase: 'collecting', timings: { commandElapsedMs } });
 
   const collected = marked(
     await client.execute(collectCode(dir, id, spec.outputs), dir),
@@ -578,6 +632,11 @@ export async function runWorkspaceJob(
   }
 
   const exitCode = exit && Number.isSafeInteger(exit.exit_code) ? (exit.exit_code as number) : null;
+  const timings = {
+    workspaceReadyWaitMs, stagingMs, commandBudgetMs, commandElapsedMs,
+    collectionMs: Math.max(0, now() - collectingAt),
+  };
+  options.onProgress?.({ phase: 'complete', timings });
   return {
     exitCode,
     timedOut: !exit,
@@ -590,5 +649,6 @@ export async function runWorkspaceJob(
     outputs,
     missing,
     skipped,
+    timings,
   };
 }

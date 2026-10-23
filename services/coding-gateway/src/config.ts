@@ -1,5 +1,6 @@
 import { ConfigError } from './config-error.js';
 import { parseE2bEgressPolicy } from './egress-policy.js';
+import { isAbsolute } from 'node:path';
 
 /** Gateway configuration and model pricing, all overridable by env. */
 
@@ -73,6 +74,7 @@ if (readinessTimeoutMs > readinessMaxAgeMs) {
 
 export const config = {
   authToken: process.env.CODER_AUTH_TOKEN,
+  allowedRunKey: pinnedRunKey(process.env),
   backend: (process.env.CODER_BACKEND ?? 'anthropic') as 'anthropic' | 'openai' | 'usepod',
   // Public default is Sonnet 4.6: strong coding at ~5x lower cost than Opus,
   // so the $200/mo budget survives public traffic. Set CODER_MODEL to
@@ -156,6 +158,27 @@ export const config = {
   readinessMaxAgeMs,
   readinessTimeoutMs,
 } as const;
+
+function pinnedRunKey(env: NodeJS.ProcessEnv): string | undefined {
+  const key = env.CODER_ALLOWED_RUN_KEY;
+  if (key === undefined) return undefined;
+  if (key.length !== 64 || !/^[a-f0-9]{64}$/.test(key)) {
+    throw new ConfigError(
+      'CODER_ALLOWED_RUN_KEY must be exactly 64 lowercase hexadecimal characters',
+    );
+  }
+  if (!env.CODER_AUTH_TOKEN || env.CODER_AUTH_TOKEN.length < 32) {
+    throw new ConfigError(
+      'CODER_ALLOWED_RUN_KEY requires CODER_AUTH_TOKEN of at least 32 characters',
+    );
+  }
+  for (const name of ['RUN_STORE_PATH', 'LEDGER_PATH'] as const) {
+    if (!env[name] || !isAbsolute(env[name])) {
+      throw new ConfigError(`CODER_ALLOWED_RUN_KEY requires an absolute ${name}`);
+    }
+  }
+  return key;
+}
 
 export function assertProductionConfig(env: NodeJS.ProcessEnv = process.env): void {
   if (env.NODE_ENV !== 'production') return;

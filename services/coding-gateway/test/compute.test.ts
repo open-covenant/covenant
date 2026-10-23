@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   ComputeError,
   ComputeSession,
@@ -27,20 +30,21 @@ const offer = (id: string, rate: number) => ({
   online: true,
 });
 
-const job = (id: string, status = 'provisioning', extra: Record<string, unknown> = {}) => ({
-  id,
-  status,
-  offer_id: 'vast:1:1',
-  maximum_usdc_micros: 188_593,
-  access_url: null,
-  error: null,
-  receipt: null,
-  ...extra,
-});
+const folders: string[] = [];
+const journalConfig = () => {
+  const folder = mkdtempSync(join(tmpdir(), 'gpu-journal-'));
+  folders.push(folder);
+  return {
+    ...CFG,
+    maxLaunches: 1,
+    maxDurationSecs: 300,
+    journalPath: join(folder, 'journal.json'),
+  };
+};
 
-function mockFetch(handler: (url: string, init?: RequestInit) => unknown) {
+function mockFetch(handler: (url: string, init?: RequestInit) => unknown | Promise<unknown>) {
   const fn = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-    const body = handler(String(url), init);
+    const body = await handler(String(url), init);
     if (body instanceof Response) return body;
     return new Response(JSON.stringify(body), { status: 200 });
   });
@@ -48,20 +52,70 @@ function mockFetch(handler: (url: string, init?: RequestInit) => unknown) {
   return fn;
 }
 
-/** One always-online offer, jobs named j1, j2, ... in launch order. */
-function mockMarket(rate = 370_519) {
-  let launched = 0;
-  return mockFetch((url, init) => {
-    if (url.endsWith('/v1/offers')) return [offer('a', rate)];
-    if (url.endsWith('/v1/jobs') && init?.method === 'POST') return job(`j${++launched}`);
-    if (init?.method === 'DELETE') return job(url.split('/').pop()!, 'cancelled');
-    throw new Error(`unexpected ${url}`);
+type WireJob = Record<string, any>;
+function mockMarket(
+  options: {
+    rate?: number;
+    offers?: WireJob[];
+    post?: (plan: WireJob, key: string) => unknown | Promise<unknown>;
+    cancel?: (job: WireJob) => unknown | Promise<unknown>;
+    cancelByKey?: (key: string) => unknown | Promise<unknown>;
+    get?: (job: WireJob) => unknown | Promise<unknown>;
+  } = {},
+) {
+  const jobs = new Map<string, WireJob>();
+  const plans: WireJob[] = [];
+  const keys: string[] = [];
+  const fetch = mockFetch(async (url, init) => {
+    if (url.endsWith('/v1/offers'))
+      return options.offers ?? [offer('a', options.rate ?? 1_200_000)];
+    if (url.includes('/v1/jobs/by-key/') && init?.method === 'DELETE') {
+      const key = decodeURIComponent(url.split('/').pop()!);
+      if (options.cancelByKey) return options.cancelByKey(key);
+      return new Response('{}', { status: 404 });
+    }
+    if (url.endsWith('/v1/jobs') && init?.method === 'POST') {
+      const plan = JSON.parse(String(init.body));
+      const key = (init.headers as Record<string, string>)['Idempotency-Key'];
+      plans.push(plan);
+      keys.push(key);
+      if (options.post) return options.post(plan, key);
+      const job = {
+        id: `j${jobs.size + 1}`,
+        status: 'running',
+        offer_id: plan.offer.id,
+        maximum_usdc_micros: plan.maximum_usdc_micros,
+        access_url: 'https://workspace.test/?token=secret-workspace',
+        error: null,
+        receipt: null,
+      };
+      jobs.set(job.id, job);
+      return job;
+    }
+    const job = jobs.get(url.split('/').pop()!);
+    if (!job) throw new Error('unexpected URL');
+    if (init?.method === 'DELETE') return options.cancel ? options.cancel(job) : settledJob(job);
+    return options.get ? options.get(job) : job;
   });
+  return { fetch, plans, keys, jobs };
+}
+function settledJob(job: WireJob, receipt: Record<string, unknown> = {}) {
+  return {
+    ...job,
+    status: 'cancelled',
+    access_url: null,
+    receipt: {
+      job_id: job.id,
+      runtime_secs: 12,
+      charged_usdc_micros: 4_000,
+      refunded_usdc_micros: job.maximum_usdc_micros - 4_000,
+      ...receipt,
+    },
+  };
 }
 
-const silenceReapLog = () => vi.spyOn(console, 'error').mockImplementation(() => {});
-
 afterEach(() => {
+  for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -222,346 +276,765 @@ describe('computeSummary', () => {
   });
 });
 
-describe('ComputeSession.launch', () => {
-  it('launches the cheapest affordable offer with the exact quote', async () => {
-    let plan: Record<string, unknown> | undefined;
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('b', 720_000), offer('a', 370_519)];
-      if (url.endsWith('/v1/jobs') && init?.method === 'POST') {
-        plan = JSON.parse(String(init.body));
-        return job('j1');
-      }
-      throw new Error(`unexpected ${url}`);
-    });
-
-    const session = new ComputeSession(CFG);
-    const launched = await session.launch();
-    expect(launched.id).toBe('j1');
-    expect((plan!.offer as { id: string }).id).toBe('a');
-    // ceil(370519 * 1800 / 3600)
-    expect(plan!.maximum_usdc_micros).toBe(185_260);
-    expect(session.committedUsd()).toBeCloseTo(0.18526, 6);
-  });
-
-  it('rejects when no offer fits the budget', async () => {
-    mockFetch((url) => {
-      if (url.endsWith('/v1/offers')) return [offer('pricey', 9_000_000)];
-      throw new Error('should not launch');
-    });
-    await expect(new ComputeSession(CFG).launch()).rejects.toThrow(/GPU budget/);
-  });
-
-  it('retries past a stale offer under one idempotency key', async () => {
-    const keys: string[] = [];
-    let posts = 0;
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 370_519), offer('b', 380_000)];
-      if (url.endsWith('/v1/jobs') && init?.method === 'POST') {
-        keys.push((init.headers as Record<string, string>)['Idempotency-Key']!);
-        posts += 1;
-        if (posts === 1) {
-          return new Response(JSON.stringify({ error: { code: 'stale_offer' } }), { status: 409 });
-        }
-        return job('j2');
-      }
-      throw new Error(`unexpected ${url}`);
-    });
-
-    const launched = await new ComputeSession(CFG).launch();
-    expect(launched.id).toBe('j2');
-    expect(posts).toBe(2);
-    // One logical launch, one key: a POST that succeeds server-side but times
-    // out here must dedupe instead of billing a workspace reap cannot see.
-    expect(new Set(keys).size).toBe(1);
-  });
-
-  it('clamps the requested duration to the configured maximum', async () => {
-    let plan: Record<string, unknown> | undefined;
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 370_519)];
-      if (init?.method === 'POST') {
-        plan = JSON.parse(String(init.body));
-        return job('j3');
-      }
-      throw new Error(`unexpected ${url}`);
-    });
-    await new ComputeSession(CFG).launch(7_200);
-    expect(plan!.duration_secs).toBe(1_800);
-  });
-
-  it('defaults to the app booking window rather than the configured maximum', async () => {
-    let plan: Record<string, unknown> | undefined;
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 100_000)];
-      if (init?.method === 'POST') {
-        plan = JSON.parse(String(init.body));
-        return job('j1');
-      }
-      throw new Error(`unexpected ${url}`);
-    });
-    await new ComputeSession({ ...CFG, maxDurationSecs: 3_600 }).launch();
-    expect(plan!.duration_secs).toBe(1_800);
-  });
-
-  it.each([0, -5, Number.NaN, Number.POSITIVE_INFINITY])(
-    'refuses duration_secs=%s instead of booking the maximum',
-    async (duration) => {
-      const fetchMock = mockMarket();
-      await expect(new ComputeSession(CFG).launch(duration)).rejects.toThrow(/positive number/);
-      expect(fetchMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it('refuses a duration below the minimum booking window', async () => {
-    const fetchMock = mockMarket();
-    await expect(new ComputeSession(CFG).launch(30)).rejects.toThrow(/at least 60 seconds/);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('floors a fractional duration', async () => {
-    let plan: Record<string, unknown> | undefined;
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 370_519)];
-      if (init?.method === 'POST') {
-        plan = JSON.parse(String(init.body));
-        return job('j1');
-      }
-      throw new Error(`unexpected ${url}`);
-    });
-    await new ComputeSession(CFG).launch(600.7);
-    expect(plan!.duration_secs).toBe(600);
-  });
-
-  it('spends the cap across the whole run, not per job', async () => {
-    const fetchMock = mockMarket();
-    const session = new ComputeSession(CFG);
-    await session.launch();
-    // 185_260 of 200_000 committed; nothing left for a second booking.
-    await expect(session.launch()).rejects.toThrow(/14740 micro-USDC left/);
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
-  });
-
-  it('does not return budget when a job is cancelled', async () => {
-    mockMarket();
-    const session = new ComputeSession(CFG);
-    await session.launch();
-    await session.cancel('j1');
-    await expect(session.launch()).rejects.toThrow(/GPU budget/);
-    expect(session.committedUsd()).toBeCloseTo(0.18526, 6);
-  });
-
-  it('stops at the launch cap even when the budget would allow more', async () => {
-    mockMarket(3_600);
-    const session = new ComputeSession({ ...CFG, maxUsdcMicros: 10_000_000, maxLaunches: 2 });
-    await session.launch();
-    await session.launch();
-    await expect(session.launch()).rejects.toThrow(/launch cap reached/);
-  });
-
-  it('agrees with itself on the singular, since one launch is the default cap', async () => {
-    mockMarket(3_600);
-    const session = new ComputeSession({ ...CFG, maxUsdcMicros: 10_000_000, maxLaunches: 1 });
-    await session.launch();
+describe('bounded durable ComputeSession', () => {
+  it('books one five-minute workspace with an exact quote below the total cap', async () => {
+    const market = mockMarket();
+    const session = new ComputeSession(journalConfig(), { runKey: 'dispatch-one' });
+    expect((await session.launch(3600)).id).toBe('j1');
+    expect(market.plans[0]).toMatchObject({ duration_secs: 300, maximum_usdc_micros: 100_000 });
+    expect(session.committedUsd()).toBe(0.1);
     await expect(session.launch()).rejects.toThrow('this run may launch 1 GPU workspace');
+    expect(market.plans).toHaveLength(1);
   });
 
-  it('reports the control plane message, not just the status code', async () => {
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 370_519)];
-      if (init?.method === 'POST') {
-        return new Response(
-          JSON.stringify({ error: { code: 'insufficient_funds', message: 'balance too low' } }),
-          { status: 402 },
-        );
-      }
-      throw new Error(`unexpected ${url}`);
-    });
-    await expect(new ComputeSession(CFG).launch()).rejects.toThrow(
-      /insufficient_funds: balance too low/,
-    );
-  });
-
-  it('rejects a malformed offer list instead of throwing a raw TypeError', async () => {
-    mockFetch(() => ({ offers: [] }));
-    const call = new ComputeSession(CFG).launch();
-    await expect(call).rejects.toBeInstanceOf(ComputeError);
-    await expect(call).rejects.toThrow(/malformed offer list/);
-  });
-
-  it('sends Content-Type only on requests that carry a body', async () => {
-    const fetchMock = mockMarket();
-    const session = new ComputeSession(CFG);
+  it('cannot spend the refund on another workspace', async () => {
+    mockMarket();
+    const session = new ComputeSession(journalConfig(), { runKey: 'cancelled-once' });
     await session.launch();
     await session.cancel('j1');
-    const headersFor = (method?: string) =>
-      fetchMock.mock.calls
-        .filter(([, init]) => init?.method === method)
-        .map(([, init]) => init!.headers as Record<string, string>);
-    expect(headersFor('POST')[0]).toHaveProperty('Content-Type', 'application/json');
-    expect(headersFor('DELETE')[0]).not.toHaveProperty('Content-Type');
-    expect(headersFor(undefined)[0]).not.toHaveProperty('Content-Type');
+    expect(session.committedUsd()).toBe(0.1);
+    await expect(session.launch()).rejects.toThrow('launch cap reached');
   });
-});
 
-describe('ComputeSession job routes', () => {
-  it.each(['../../v1/admin/tokens', '../offers?all=true', 'j1/../../v1/offers', ''])(
-    'refuses to build a job route from %s',
-    async (jobId) => {
-      const fetchMock = mockMarket();
-      const session = new ComputeSession(CFG);
-      await expect(session.status(jobId)).rejects.toThrow(/not a job id/);
-      await expect(session.cancel(jobId)).rejects.toThrow(/not a job id/);
-      expect(fetchMock).not.toHaveBeenCalled();
+  it('reserves the quote durably before POST and never journals access credentials', async () => {
+    const cfg = journalConfig();
+    mockMarket({
+      post: (plan) => {
+        const saved = readFileSync(cfg.journalPath, 'utf8');
+        expect(saved).toContain('100000');
+        expect(saved).toContain('dispatch-reserved');
+        return {
+          id: 'j1',
+          offer_id: 'a',
+          maximum_usdc_micros: plan.maximum_usdc_micros,
+          status: 'running',
+          access_url: 'https://test/?token=secret-workspace',
+          error: null,
+          receipt: null,
+        };
+      },
+    });
+    await new ComputeSession(cfg, { runKey: 'dispatch-reserved' }).launch();
+    const saved = readFileSync(cfg.journalPath, 'utf8');
+    expect(saved).not.toContain('secret-workspace');
+    expect(saved).not.toContain('access_url');
+    expect(saved).not.toContain('beta-token');
+  });
+
+  it('serializes simultaneous launches from separate sessions sharing a run key', async () => {
+    const market = mockMarket();
+    const cfg = journalConfig();
+    const first = new ComputeSession(cfg, { runKey: 'concurrent-run' });
+    const second = new ComputeSession(cfg, { runKey: 'concurrent-run' });
+    const results = await Promise.allSettled([first.launch(), second.launch()]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(market.plans).toHaveLength(1);
+  });
+
+  it('replays an ambiguous launch with the same key and exact plan across restart', async () => {
+    let attempts = 0;
+    const market = mockMarket({
+      post: (plan) => {
+        if (++attempts === 1) throw new Error('network timeout after provider accepted');
+        return {
+          id: 'recovered',
+          status: 'running',
+          offer_id: 'a',
+          maximum_usdc_micros: plan.maximum_usdc_micros,
+          access_url: null,
+          error: null,
+          receipt: null,
+        };
+      },
+    });
+    const cfg = journalConfig();
+    const initial = new ComputeSession(cfg, { runKey: 'uncertain-run' });
+    await expect(initial.launch()).rejects.toThrow('network timeout');
+    expect(initial.committedUsd()).toBe(0.1);
+    const restarted = new ComputeSession(cfg, { runKey: 'uncertain-run' });
+    await expect(restarted.launch()).resolves.toMatchObject({ id: 'recovered' });
+    expect(market.keys[0]).toBe(market.keys[1]);
+    expect(market.plans[0]).toEqual(market.plans[1]);
+    await expect(restarted.launch()).rejects.toThrow('launch cap reached');
+  });
+
+  it('never creates or replays an unknown booking during recovery or after cleanup', async () => {
+    const market = mockMarket({
+      post: () => {
+        throw new Error('timeout');
+      },
+    });
+    const cfg = journalConfig();
+    const session = new ComputeSession(cfg, { runKey: 'unknown' });
+    await expect(session.launch()).rejects.toThrow('timeout');
+    const report = await ComputeSession.recover(cfg);
+    expect(report.runs[0]).toMatchObject({
+      runKey: 'unknown',
+      complete: false,
+      pendingJobIds: [],
+    });
+    expect(report.runs[0].pendingLaunchKeys).toHaveLength(1);
+    expect(market.plans).toHaveLength(1);
+    await expect(new ComputeSession(cfg, { runKey: 'unknown' }).launch()).rejects.toThrow('closed');
+  });
+
+  it('does not replay a reservation after its booking deadline', async () => {
+    const market = mockMarket({
+      post: () => {
+        throw new Error('timeout');
+      },
+    });
+    const cfg = journalConfig();
+    await expect(new ComputeSession(cfg, { runKey: 'expired' }).launch()).rejects.toThrow(
+      'timeout',
+    );
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 301_000);
+    await expect(new ComputeSession(cfg, { runKey: 'expired' }).launch()).rejects.toThrow(
+      'deadline',
+    );
+    expect(market.plans).toHaveLength(1);
+  });
+
+  it('never exceeds the cumulative budget with a larger configured launch setting', async () => {
+    const market = mockMarket({ rate: 1_800_000 });
+    const session = new ComputeSession(
+      { ...journalConfig(), maxLaunches: 2 },
+      { runKey: 'aggregate' },
+    );
+    await session.launch();
+    await expect(session.launch()).rejects.toThrow('50000 micro-USDC left');
+    expect(market.plans).toHaveLength(1);
+    expect(session.committedUsd()).toBe(0.15);
+  });
+
+  it('rejects an expensive quote without making a paid request', async () => {
+    const market = mockMarket({ rate: 3_000_000 });
+    await expect(
+      new ComputeSession(journalConfig(), { runKey: 'pricey' }).launch(),
+    ).rejects.toThrow('GPU budget');
+    expect(market.plans).toHaveLength(0);
+  });
+
+  it.each([0, -1, NaN, Infinity, 60, 299])(
+    'rejects unsupported duration %s before requests',
+    async (duration) => {
+      const market = mockMarket();
+      await expect(
+        new ComputeSession(journalConfig(), { runKey: 'duration' }).launch(duration),
+      ).rejects.toThrow();
+      expect(market.fetch).not.toHaveBeenCalled();
     },
   );
 
-  it('refuses a job this run did not launch', async () => {
-    mockMarket();
-    const session = new ComputeSession(CFG);
-    await session.launch();
-    await expect(session.status('j9')).rejects.toThrow(/was not launched by this run/);
-    await expect(session.cancel('j9')).rejects.toThrow(/was not launched by this run/);
+  it('rejects per-run bounds above the operator limits', () => {
+    expect(
+      () => new ComputeSession(journalConfig(), { runKey: 'too-high', maxUsdcMicros: 200_001 }),
+    ).toThrow('invalid per-run');
   });
 
-  it('keeps a cancelled job pollable for its receipt', async () => {
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 370_519)];
-      if (url.endsWith('/v1/jobs') && init?.method === 'POST') return job('j1');
-      if (init?.method === 'DELETE') return job('j1', 'cancelled');
-      return job('j1', 'cancelled', {
-        receipt: { runtime_secs: 12, charged_usdc_micros: 1_235, refunded_usdc_micros: 184_025 },
-      });
-    });
-    const session = new ComputeSession(CFG);
-    await session.launch();
-    await session.cancel('j1');
-    const after = await session.status('j1');
-    expect(after.receipt).toMatchObject({ charged_usdc_micros: 1_235 });
+  it('fails closed on a corrupt journal rather than resetting the spend counter', () => {
+    const cfg = journalConfig();
+    writeFileSync(cfg.journalPath, '{"version":1,"runs":{"bad":{}}}');
+    expect(() => new ComputeSession(cfg, { runKey: 'corrupt' })).toThrow('invalid GPU journal');
   });
 
-  it('returns a failed job with its cause instead of throwing http_200', async () => {
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 370_519)];
-      if (url.endsWith('/v1/jobs') && init?.method === 'POST') return job('j1');
-      return job('j1', 'failed', { error: 'gpu fell offline' });
-    });
-    const session = new ComputeSession(CFG);
-    await session.launch();
-    expect(await session.status('j1')).toMatchObject({
-      status: 'failed',
-      error: 'gpu fell offline',
-    });
-  });
-
-  it('cancels a job that carries error text', async () => {
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 370_519)];
-      if (url.endsWith('/v1/jobs') && init?.method === 'POST') return job('j1');
-      return job('j1', 'cancelled', { error: 'gpu fell offline' });
-    });
-    const session = new ComputeSession(CFG);
-    await session.launch();
-    expect(await session.cancel('j1')).toMatchObject({ status: 'cancelled' });
-  });
-
-  it('rejects an empty cancel response instead of returning null to the model', async () => {
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 370_519)];
-      if (url.endsWith('/v1/jobs') && init?.method === 'POST') return job('j1');
-      return new Response(null, { status: 204 });
-    });
-    const session = new ComputeSession(CFG);
-    await session.launch();
-    const call = session.cancel('j1');
-    await expect(call).rejects.toBeInstanceOf(ComputeError);
-    await expect(call).rejects.toThrow(/no job/);
+  it('rejects malformed offers and retains a valid ID from a malformed paid response', async () => {
+    mockFetch(() => [{ ...offer('a', 100), rate_usdc_micros_per_hour: -1 }]);
+    await expect(
+      new ComputeSession(journalConfig(), { runKey: 'bad-offer' }).launch(),
+    ).rejects.toThrow('malformed offer');
+    mockMarket({ post: () => ({ id: 'known-malformed', status: 'running' }) });
+    const session = new ComputeSession(journalConfig(), { runKey: 'bad-job' });
+    await expect(session.launch()).rejects.toThrow('malformed job');
+    expect(session.inspect().pendingJobIds).toEqual(['known-malformed']);
   });
 });
 
-describe('ComputeSession.reap', () => {
-  it('cancels launched jobs that were not cancelled during the run', async () => {
-    const cancelled: string[] = [];
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 370_519)];
-      if (url.endsWith('/v1/jobs') && init?.method === 'POST') return job('leak');
-      if (init?.method === 'DELETE') {
-        cancelled.push(url.split('/').pop()!);
-        return job('leak', 'cancelled');
-      }
-      throw new Error(`unexpected ${url}`);
-    });
+describe('launches the provider refuses', () => {
+  const refused = (plan: WireJob, id: string) => ({
+    id,
+    status: 'failed',
+    offer_id: plan.offer.id,
+    maximum_usdc_micros: plan.maximum_usdc_micros,
+    access_url: null,
+    error: 'provider_rejected',
+    receipt: {
+      job_id: id,
+      runtime_secs: 0,
+      charged_usdc_micros: 0,
+      refunded_usdc_micros: plan.maximum_usdc_micros,
+      provider: 'control-plane',
+      commitment: `control-plane:launch-rejected:${id}`,
+    },
+  });
+  const offers = [
+    offer('a', 404_445),
+    offer('b', 407_408),
+    offer('c', 407_408),
+    offer('d', 611_112),
+  ];
 
-    const session = new ComputeSession(CFG);
-    await session.launch();
-    const reaped = await session.reap();
-    expect(cancelled).toEqual(['leak']);
-    expect(reaped).toEqual(['leak']);
-    // Idempotent: nothing left to reap.
-    expect(await session.reap()).toEqual([]);
+  it('moves to the next machine without using the launch allowance', async () => {
+    let posts = 0;
+    const market = mockMarket({
+      offers,
+      post: (plan) =>
+        ++posts === 1
+          ? refused(plan, 'declined-1')
+          : {
+              id: 'accepted-2',
+              status: 'provisioning',
+              offer_id: plan.offer.id,
+              maximum_usdc_micros: plan.maximum_usdc_micros,
+              access_url: null,
+              error: null,
+              receipt: null,
+            },
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'refused-once' });
+    const job = await session.launch(300);
+    expect(job).toMatchObject({ id: 'accepted-2', offer_id: 'b', status: 'provisioning' });
+    expect(market.plans.map((plan) => plan.offer.id)).toEqual(['a', 'b']);
+    expect(new Set(market.keys).size).toBe(2);
+    expect(session.inspect()).toMatchObject({ pendingJobIds: ['accepted-2'], settled: [] });
+    // The accepted launch is the run's one launch.
+    await expect(session.launch(300)).rejects.toThrow(/launch cap reached/);
   });
 
-  it('does not reap jobs the model already cancelled', async () => {
-    const deletes: string[] = [];
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 370_519)];
-      if (url.endsWith('/v1/jobs') && init?.method === 'POST') return job('done');
-      if (init?.method === 'DELETE') {
-        deletes.push(url.split('/').pop()!);
-        return job('done', 'cancelled');
-      }
-      throw new Error(`unexpected ${url}`);
+  it('stops after two refusals and reports the last one', async () => {
+    const market = mockMarket({
+      offers,
+      post: (plan, key) => refused(plan, `declined-${key.slice(-1)}`),
     });
-
-    const session = new ComputeSession(CFG);
-    await session.launch();
-    await session.cancel('done');
-    await session.reap();
-    expect(deletes).toEqual(['done']);
+    const session = new ComputeSession(journalConfig(), { runKey: 'refused-always' });
+    const job = await session.launch(300);
+    expect(job.status).toBe('failed');
+    expect(market.plans.map((plan) => plan.offer.id)).toEqual(['a', 'b', 'c']);
+    expect(session.inspect().settled).toHaveLength(1);
+    expect(session.inspect().settled[0]!.receipt.charged_usdc_micros).toBe(0);
+    await expect(session.launch(300)).rejects.toThrow(/launch cap reached/);
+    expect(market.plans).toHaveLength(3);
   });
 
-  it('keeps retrying a job that only reports cancelling', async () => {
-    const log = silenceReapLog();
-    let deletes = 0;
+  it('moves past a stale quote the control plane refuses before booking', async () => {
+    let posts = 0;
+    const market = mockMarket({
+      offers,
+      post: (plan) =>
+        ++posts === 1
+          ? new Response(JSON.stringify({ error: { code: 'stale_offer' } }), { status: 409 })
+          : {
+              id: 'accepted-after-stale',
+              status: 'provisioning',
+              offer_id: plan.offer.id,
+              maximum_usdc_micros: plan.maximum_usdc_micros,
+              access_url: null,
+              error: null,
+              receipt: null,
+            },
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'stale-once' });
+    expect((await session.launch(300)).offer_id).toBe('b');
+    expect(market.plans.map((plan) => plan.offer.id)).toEqual(['a', 'b']);
+  });
+
+  it('gives up on stale quotes after two retries', async () => {
+    const market = mockMarket({
+      offers,
+      post: () => new Response(JSON.stringify({ error: { code: 'stale_offer' } }), { status: 409 }),
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'stale-always' });
+    await expect(session.launch(300)).rejects.toThrow(/stale_offer/);
+    expect(market.plans).toHaveLength(3);
+  });
+
+  it('does not retry a failure that charged anything', async () => {
+    const market = mockMarket({
+      offers,
+      post: (plan) => ({
+        ...refused(plan, 'charged-1'),
+        receipt: {
+          ...refused(plan, 'charged-1').receipt,
+          provider: 'vast',
+          charged_usdc_micros: 100,
+          refunded_usdc_micros: plan.maximum_usdc_micros - 100,
+        },
+      }),
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'charged-failure' });
+    expect((await session.launch(300)).status).toBe('failed');
+    expect(market.plans).toHaveLength(1);
+  });
+});
+
+describe('cleanup and receipt settlement', () => {
+  it('does not delay known-job cleanup behind an unknown-key request', async () => {
+    let release!: () => void;
+    const cancelled = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let posts = 0;
+    const known = {
+      id: 'already-known',
+      status: 'running',
+      offer_id: 'a',
+      maximum_usdc_micros: 100_000,
+      access_url: null,
+      error: null,
+      receipt: null,
+    };
+    const market = mockMarket({
+      post: () => {
+        if (++posts === 1) return known;
+        throw new Error('second response lost');
+      },
+      cancel: (job) => {
+        release();
+        return settledJob(job);
+      },
+      cancelByKey: async (key) => {
+        await cancelled;
+        return { idempotency_key: key, cancellation_recorded: true, job: null };
+      },
+    });
+    market.jobs.set(known.id, known);
+    const session = new ComputeSession(
+      { ...journalConfig(), maxLaunches: 2 },
+      { runKey: 'parallel-cleanup' },
+    );
+    await session.launch();
+    await expect(session.launch()).rejects.toThrow('second response lost');
+    expect(await session.reap()).toMatchObject({ complete: true, settled: [{ job_id: known.id }] });
+    expect(market.plans).toHaveLength(2);
+    expect(session.committedUsd()).toBe(0.2);
+  });
+
+  it('recovers a lost launch response by key and settles its receipt without another POST', async () => {
+    let accepted!: WireJob;
+    const market = mockMarket({
+      post: (plan) => {
+        accepted = {
+          id: 'lost-response-job',
+          status: 'stopping',
+          offer_id: plan.offer.id,
+          maximum_usdc_micros: plan.maximum_usdc_micros,
+          access_url: null,
+          error: null,
+          receipt: null,
+        };
+        throw new Error('response lost after acceptance');
+      },
+      cancelByKey: (key) => ({
+        idempotency_key: key,
+        cancellation_recorded: true,
+        job: accepted,
+      }),
+    });
+    const cfg = journalConfig();
+    const session = new ComputeSession(cfg, { runKey: 'lost-response' });
+    await expect(session.launch()).rejects.toThrow('response lost');
+    market.jobs.set(accepted.id, accepted);
+    const recovered = await ComputeSession.recover(cfg);
+    expect(recovered.runs[0]).toMatchObject({
+      complete: true,
+      pendingLaunchKeys: [],
+      pendingJobIds: [],
+      settled: [{ job_id: accepted.id, receipt: { charged_usdc_micros: 4_000 } }],
+    });
+    expect(market.plans).toHaveLength(1);
+    const lookup = market.fetch.mock.calls.find(([url]) => String(url).includes('/by-key/'))!;
+    expect(lookup[0]).toBe(`${cfg.apiUrl}/v1/jobs/by-key/${market.keys[0]}`);
+    expect(lookup[1]).toMatchObject({
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer beta-token' },
+    });
+    const restarted = new ComputeSession(cfg, { runKey: 'lost-response' });
+    expect(restarted.committedUsd()).toBe(0.1);
+    await expect(restarted.launch()).rejects.toThrow('closed');
+  });
+
+  it('accepts only a sealed absence, preserves the consumed booking and survives restart', async () => {
+    const market = mockMarket({
+      post: () => {
+        throw new Error('unknown delivery');
+      },
+      cancelByKey: (key) => ({ idempotency_key: key, cancellation_recorded: true, job: null }),
+    });
+    const cfg = journalConfig();
+    const session = new ComputeSession(cfg, { runKey: 'sealed-absent' });
+    await expect(session.launch()).rejects.toThrow('unknown delivery');
+    expect(await session.reap()).toMatchObject({
+      complete: true,
+      settled: [],
+      pendingLaunchKeys: [],
+      pendingJobIds: [],
+    });
+    const saved = Object.values(
+      JSON.parse(readFileSync(cfg.journalPath, 'utf8')).runs,
+    )[0] as WireJob;
+    expect(saved).toMatchObject({ closed: true, maxLaunches: 1, maxUsdcMicros: 200_000 });
+    expect(saved.reservations).toHaveLength(1);
+    expect(saved.reservations[0]).toMatchObject({
+      rejected: true,
+      key: market.keys[0],
+      plan: market.plans[0],
+    });
+    const restarted = new ComputeSession(cfg, { runKey: 'sealed-absent' });
+    expect(restarted.committedUsd()).toBe(0.1);
+    await expect(restarted.launch()).rejects.toThrow('closed');
+    expect((await ComputeSession.recover(cfg)).runs[0].complete).toBe(true);
+    expect(market.plans).toHaveLength(1);
+    expect(
+      market.fetch.mock.calls.filter(([url]) => String(url).includes('/by-key/')),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    ['missing seal', (key: string) => ({ idempotency_key: key, job: null })],
+    [
+      'false seal',
+      (key: string) => ({ idempotency_key: key, cancellation_recorded: false, job: null }),
+    ],
+    [
+      'string seal',
+      (key: string) => ({ idempotency_key: key, cancellation_recorded: 'true', job: null }),
+    ],
+    ['wrong key', () => ({ idempotency_key: 'other-key', cancellation_recorded: true, job: null })],
+    ['missing job', (key: string) => ({ idempotency_key: key, cancellation_recorded: true })],
+    [
+      'malformed job',
+      (key: string) => ({
+        idempotency_key: key,
+        cancellation_recorded: true,
+        job: { id: 'untrusted-id' },
+      }),
+    ],
+    ['empty body', () => new Response(null, { status: 204 })],
+    ['not found', () => new Response('{}', { status: 404 })],
+    ['no authentication', () => new Response('{}', { status: 401 })],
+    ['wrong owner', () => new Response('{}', { status: 403 })],
+    [
+      'timeout',
+      () => {
+        throw new Error('timeout');
+      },
+    ],
+  ])(
+    'retains an unknown booking on %s and safely retries background cancellation',
+    async (_name, reply) => {
+      let valid = false;
+      const market = mockMarket({
+        post: () => {
+          throw new Error('lost response');
+        },
+        cancelByKey: (key) =>
+          valid ? { idempotency_key: key, cancellation_recorded: true, job: null } : reply(key),
+      });
+      const cfg = journalConfig();
+      const session = new ComputeSession(cfg, { runKey: 'invalid-key-cancellation' });
+      await expect(session.launch()).rejects.toThrow('lost response');
+      const before = JSON.parse(readFileSync(cfg.journalPath, 'utf8'));
+      Object.values(before.runs).forEach((run) => {
+        (run as WireJob).closed = true;
+      });
+      expect(await session.reap()).toMatchObject({
+        complete: false,
+        pendingJobIds: [],
+        settled: [],
+      });
+      expect(session.inspect().pendingLaunchKeys).toEqual(market.keys);
+      expect(JSON.parse(readFileSync(cfg.journalPath, 'utf8'))).toEqual(before);
+      valid = true;
+      expect(await session.reap()).toMatchObject({ complete: true, settled: [] });
+      expect(market.plans).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    { offer_id: 'different-offer' },
+    { maximum_usdc_micros: 99_999 },
+    { receipt: { runtime_secs: 1, charged_usdc_micros: 1, refunded_usdc_micros: 1 } },
+  ])(
+    'does not attach an ID from a key result that mismatches its booking: %j',
+    async (mismatch) => {
+      const market = mockMarket({
+        post: () => {
+          throw new Error('lost response');
+        },
+        cancelByKey: (key) => ({
+          idempotency_key: key,
+          cancellation_recorded: true,
+          job: {
+            id: 'untrusted-id',
+            status: 'cancelled',
+            offer_id: 'a',
+            maximum_usdc_micros: 100_000,
+            access_url: null,
+            error: null,
+            receipt: null,
+            ...mismatch,
+          },
+        }),
+      });
+      const session = new ComputeSession(journalConfig(), { runKey: 'mismatched-key-job' });
+      await expect(session.launch()).rejects.toThrow('lost response');
+      expect(await session.reap()).toMatchObject({
+        complete: false,
+        pendingLaunchKeys: market.keys,
+        pendingJobIds: [],
+        settled: [],
+      });
+      expect(
+        market.fetch.mock.calls.filter(([url]) => String(url).endsWith('/untrusted-id')),
+      ).toHaveLength(0);
+    },
+  );
+
+  it('polls stopping until a terminal receipt conserves the booked maximum', async () => {
+    let polls = 0;
+    mockMarket({
+      cancel: (job) => ({ ...job, status: 'stopping' }),
+      get: (job) =>
+        ++polls === 1 ? { ...job, status: 'cancelled', receipt: null } : settledJob(job),
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'stopping' });
+    await session.launch();
+    const result = await session.reap();
+    expect(polls).toBe(2);
+    expect(result).toMatchObject({
+      complete: true,
+      pendingJobIds: [],
+      pendingLaunchKeys: [],
+      settled: [
+        {
+          job_id: 'j1',
+          maximum_usdc_micros: 100_000,
+          receipt: { charged_usdc_micros: 4_000, refunded_usdc_micros: 96_000 },
+        },
+      ],
+    });
+    expect(await session.reap()).toEqual(result);
+  });
+
+  it('retains a nonterminal job after the cleanup deadline', async () => {
+    mockMarket({
+      cancel: (job) => ({ ...job, status: 'stopping' }),
+      get: (job) => ({ ...job, status: 'stopping' }),
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'still-stopping' });
+    await session.launch();
+    expect(await session.reap(10)).toMatchObject({
+      complete: false,
+      pendingJobIds: ['j1'],
+      settled: [],
+    });
+  });
+
+  it.each([
+    { charged_usdc_micros: 100_001, refunded_usdc_micros: 0 },
+    { charged_usdc_micros: -1, refunded_usdc_micros: 100_001 },
+    { charged_usdc_micros: 4_000, refunded_usdc_micros: 95_999 },
+    { runtime_secs: 1.5 },
+    { job_id: 'someone-elses-job' },
+    { commitment: { access_url: 'https://secret-workspace/' } },
+  ])('never reports an invalid final receipt as settled: %j', async (receipt) => {
+    mockMarket({ cancel: (job) => settledJob(job, receipt) });
+    const session = new ComputeSession(journalConfig(), { runKey: 'invalid-receipt' });
+    await session.launch();
+    expect(await session.reap()).toMatchObject({
+      complete: false,
+      pendingJobIds: ['j1'],
+      settled: [],
+    });
+  });
+
+  it('does not treat terminal status without a receipt as successful settlement', async () => {
+    mockMarket({
+      cancel: (job) => ({ ...job, status: 'cancelled', receipt: null }),
+      get: (job) => ({ ...job, status: 'cancelled', receipt: null }),
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'missing-receipt' });
+    await session.launch();
+    expect(await session.reap(10)).toMatchObject({ complete: false, pendingJobIds: ['j1'] });
+    await expect(session.status('j1')).rejects.toThrow('receipt is still pending');
+  });
+
+  it('recovers and settles a known workspace after restart without another POST', async () => {
+    const market = mockMarket();
+    const cfg = journalConfig();
+    await new ComputeSession(cfg, { runKey: 'restart' }).launch();
+    const recovered = await ComputeSession.recover(cfg);
+    expect(recovered.runs[0]).toMatchObject({
+      runKey: 'restart',
+      complete: true,
+      settled: [{ job_id: 'j1' }],
+    });
+    expect(market.plans).toHaveLength(1);
+    await expect(new ComputeSession(cfg, { runKey: 'restart' }).launch()).rejects.toThrow('closed');
+  });
+
+  it('waits for an in-flight POST then cancels the returned job', async () => {
+    let resolvePost!: (value: unknown) => void;
+    let started!: () => void;
+    const start = new Promise<void>((resolve) => {
+      started = resolve;
+    });
     mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 370_519)];
-      if (url.endsWith('/v1/jobs') && init?.method === 'POST') return job('slow');
+      if (url.endsWith('/v1/offers')) return [offer('a', 1_200_000)];
+      if (init?.method === 'POST') {
+        started();
+        return new Promise((resolve) => {
+          resolvePost = resolve;
+        });
+      }
       if (init?.method === 'DELETE')
-        return job('slow', ++deletes === 1 ? 'cancelling' : 'cancelled');
-      throw new Error(`unexpected ${url}`);
+        return settledJob({
+          id: 'inflight',
+          offer_id: 'a',
+          maximum_usdc_micros: 100_000,
+          access_url: null,
+          error: null,
+        });
+      throw new Error('unexpected request');
     });
+    const session = new ComputeSession(journalConfig(), { runKey: 'inflight' });
+    const launch = session.launch();
+    await start;
+    const reap = session.reap();
+    resolvePost({
+      id: 'inflight',
+      status: 'running',
+      offer_id: 'a',
+      maximum_usdc_micros: 100_000,
+      access_url: null,
+      error: null,
+      receipt: null,
+    });
+    await launch;
+    expect(await reap).toMatchObject({ complete: true, settled: [{ job_id: 'inflight' }] });
+    await expect(session.launch()).rejects.toThrow('closed');
+  });
 
-    const session = new ComputeSession(CFG);
+  it.each(['../../v1/offers', '', 'j1/../../v1/admin', 'unowned'])(
+    'blocks invalid and unowned IDs %s',
+    async (id) => {
+      const market = mockMarket();
+      const session = new ComputeSession(journalConfig(), { runKey: 'ownership' });
+      await expect(session.status(id)).rejects.toThrow();
+      await expect(session.cancel(id)).rejects.toThrow();
+      expect(market.fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects responses bound to a different booking', async () => {
+    mockMarket({ get: (job) => ({ ...job, id: 'other-run' }) });
+    const session = new ComputeSession(journalConfig(), { runKey: 'wrong-id' });
     await session.launch();
-    expect(await session.reap()).toEqual([]);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('slow'));
-    expect(await session.reap()).toEqual(['slow']);
+    await expect(session.status('j1')).rejects.toThrow('does not match this booking');
+  });
+});
+
+describe('launch response and authorization edge cases', () => {
+  it('never reports a terminal launch without a receipt as success', async () => {
+    mockMarket({
+      post: (plan) => ({
+        id: 'terminal-missing',
+        status: 'failed',
+        offer_id: 'a',
+        maximum_usdc_micros: plan.maximum_usdc_micros,
+        access_url: null,
+        error: null,
+        receipt: null,
+      }),
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'terminal-launch' });
+    await expect(session.launch()).rejects.toThrow('receipt is still pending');
+    expect(session.inspect()).toMatchObject({
+      complete: false,
+      pendingJobIds: ['terminal-missing'],
+    });
+  });
+
+  it('does not replay a pending reservation above a tightened authorization cap', async () => {
+    const market = mockMarket({
+      post: () => {
+        throw new Error('ambiguous');
+      },
+    });
+    const cfg = journalConfig();
+    await expect(new ComputeSession(cfg, { runKey: 'tightened' }).launch()).rejects.toThrow(
+      'ambiguous',
+    );
+    await expect(
+      new ComputeSession(cfg, { runKey: 'tightened', maxUsdcMicros: 50_000 }).launch(),
+    ).rejects.toThrow('current run authorization');
+    expect(market.plans).toHaveLength(1);
+  });
+
+  it('does not discard an uncertain reservation after a non-specific server error', async () => {
+    mockMarket({
+      post: () =>
+        new Response(
+          JSON.stringify({
+            error: { code: 'busy', message: 'https://workspace/?secret=do-not-log' },
+          }),
+          { status: 500 },
+        ),
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'server-error' });
+    await expect(session.launch()).rejects.toThrow('compute request failed: busy');
+    expect(session.inspect().pendingLaunchKeys).toHaveLength(1);
+    expect(session.committedUsd()).toBe(0.1);
+  });
+
+  it('retains ownership after an empty DELETE reply so recovery can retry cleanup', async () => {
+    const cfg = journalConfig();
+    let deletes = 0;
+    mockMarket({
+      cancel: (job) => (++deletes === 1 ? new Response(null, { status: 204 }) : settledJob(job)),
+    });
+    const session = new ComputeSession(cfg, { runKey: 'empty-delete' });
+    await session.launch();
+    expect(await session.reap()).toMatchObject({ complete: false, pendingJobIds: ['j1'] });
+    expect((await ComputeSession.recover(cfg)).runs[0]).toMatchObject({
+      complete: true,
+      pendingJobIds: [],
+    });
     expect(deletes).toBe(2);
   });
+});
 
-  it('reports the jobs it could not cancel and keeps reaping the rest', async () => {
-    const log = silenceReapLog();
-    const names = ['stuck', 'clean'];
-    let launched = 0;
-    let stuckDeletes = 0;
-    mockFetch((url, init) => {
-      if (url.endsWith('/v1/offers')) return [offer('a', 3_600)];
-      if (url.endsWith('/v1/jobs') && init?.method === 'POST') return job(names[launched++]!);
-      if (init?.method === 'DELETE') {
-        const id = url.split('/').pop()!;
-        if (id !== 'stuck') return job(id, 'cancelled');
-        stuckDeletes += 1;
-        return new Response(JSON.stringify({ error: { code: 'busy' } }), { status: 500 });
-      }
-      throw new Error(`unexpected ${url}`);
+describe('dispatch cancellation before GPU submission', () => {
+  it('prevents a fresh or ambiguous POST after dispatcher abort', async () => {
+    const market = mockMarket({
+      post: () => {
+        throw new Error('timeout');
+      },
     });
+    const controller = new AbortController();
+    const session = new ComputeSession(journalConfig(), {
+      runKey: 'abort-retry',
+      signal: controller.signal,
+    });
+    await expect(session.launch()).rejects.toThrow('timeout');
+    controller.abort();
+    await expect(session.launch()).rejects.toThrow('aborted');
+    expect(market.plans).toHaveLength(1);
+  });
 
-    const session = new ComputeSession({ ...CFG, maxUsdcMicros: 10_000_000 });
-    await session.launch();
-    await session.launch();
-    expect(await session.reap()).toEqual(['clean']);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('stuck'));
-    // The unconfirmed job stays tracked, so a later reap tries it again.
-    expect(await session.reap()).toEqual([]);
-    expect(stuckDeletes).toBe(2);
+  it('rechecks abort after a pending offer lookup before reserving or paying', async () => {
+    const controller = new AbortController();
+    const fetched = mockFetch((url) => {
+      expect(url).toContain('/v1/offers');
+      controller.abort();
+      return [offer('a', 1_200_000)];
+    });
+    const session = new ComputeSession(journalConfig(), {
+      runKey: 'abort-offers',
+      signal: controller.signal,
+    });
+    await expect(session.launch()).rejects.toThrow('aborted');
+    expect(fetched).toHaveBeenCalledTimes(1);
+    expect(session.committedUsd()).toBe(0);
   });
 });

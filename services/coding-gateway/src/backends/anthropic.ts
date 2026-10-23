@@ -1,18 +1,51 @@
 import Anthropic from '@anthropic-ai/sdk';
 import {
-  computeConfig,
   defaultDurationSecs,
   workspaceCount,
   ComputeSession,
   MIN_DURATION_SECS,
   type ComputeConfig,
+  type ComputeCleanupReport,
 } from '../compute.js';
-import { config } from '../config.js';
+import { config, PRICING } from '../config.js';
+import { GpuWorkloadError, type GpuRunner } from '../gpu-run.js';
 import { isolatedShellCommand } from '../sandbox-command.js';
 import type { CodingBackend, GatewayEvent, Sandbox, TokenUsage } from '../types.js';
 
-const MAX_TOKENS = 64_000;
-const MAX_TURNS = 60;
+const MAX_TOKENS = 8_192;
+const MAX_TURNS = 30;
+const CLAUDE_MODELS = new Set(['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5']);
+
+type AnthropicClient = Pick<Anthropic, 'messages'>;
+type RunOptions = Parameters<CodingBackend['run']>[0];
+type ModelPrice = { input: number; output: number; cacheRead: number; cacheWrite: number };
+
+function priceFor(model: string): ModelPrice {
+  const price = Object.hasOwn(PRICING, model) ? PRICING[model] : undefined;
+  if (
+    !CLAUDE_MODELS.has(model) ||
+    !price ||
+    Object.values(price).some((p) => !Number.isFinite(p) || p <= 0)
+  ) {
+    throw new Error('Anthropic model has no recognized, valid configured price');
+  }
+  return price;
+}
+
+function tokenCount(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
+    throw new Error('Anthropic returned invalid token accounting');
+  return value;
+}
+
+function usageMicros(usage: TokenUsage, price: ModelPrice): number {
+  return Math.ceil(
+    usage.inputTokens * price.input +
+      usage.outputTokens * price.output +
+      usage.cacheReadTokens * price.cacheRead +
+      usage.cacheCreationTokens * price.cacheWrite,
+  );
+}
 
 const SYSTEM = `You are a coding agent working inside an ephemeral sandbox with a
 few-minute wall-clock budget, so work efficiently and don't waste steps.
@@ -87,31 +120,57 @@ export function gpuWorkspaceTool(cfg: ComputeConfig): Anthropic.Tool {
   return {
     name: 'gpu_workspace',
     description:
-      'Rent a dedicated GPU workspace (CUDA + Jupyter) on the Covenant compute market. This spends ' +
-      `real USDC. Across this whole run you may launch ${workspaces} for a combined maximum of ` +
-      `$${budgetUsd}. Each launch commits its full booking maximum against that budget and ` +
-      'cancelling early does not return it, so launch only when the task genuinely needs a GPU. ' +
+      'Rent a dedicated GPU (CUDA 12.4 runtime on Ubuntu 22.04) on the Covenant compute market ' +
+      'and run commands on it. This spends real USDC. Across this whole run you may launch ' +
+      `${workspaces} for a combined maximum of $${budgetUsd}. Each launch commits its full ` +
+      'booking maximum against that budget and cancelling early does not return it, so launch ' +
+      'only when the task genuinely needs a GPU. ' +
       `action=launch books the cheapest online GPU for duration_secs (default ${defaultSecs}s, ` +
-      `maximum ${cfg.maxDurationSecs}s). action=status polls a job you launched: provisioning takes ` +
-      'minutes and access_url appears once it is running. Every poll costs a full model turn, so ' +
-      'run `sleep 25` with the bash tool between polls instead of polling back to back. ' +
-      'action=cancel stops a job and returns its billing receipt. You cannot use the workspace ' +
-      'yourself. This sandbox can only reach a short list of package registries, so nothing you ' +
-      'run here can connect to the access URL. Treat access_url as a live credential for the ' +
-      'person who asked for the workspace: put it in your final answer once and do not repeat it ' +
-      'elsewhere. The gateway tries to cancel anything still running when the run ends, but a ' +
-      'workspace that will not cancel bills until its own deadline.',
+      `maximum ${cfg.maxDurationSecs}s); the booked time starts once the GPU is ready. ` +
+      'action=run executes a shell command on a GPU you launched. It waits for the GPU to finish ' +
+      'starting, so call it right after launch instead of polling status. The command runs with ' +
+      'bash in a fresh working directory on the GPU machine and has internet access. python3 is ' +
+      'first on PATH; install packages with python3 -m pip, and download with python3 because ' +
+      'curl may be missing. files copies files from this sandbox into that directory first. ' +
+      'outputs lists result files, relative to that directory, to bring back: each returns with ' +
+      'its size and SHA-256, small text files return in full, and every output is published ' +
+      'with a download link in the final result automatically. The command must finish within ' +
+      'the booked time, which installs also use; it is stopped when that time is nearly up. ' +
+      'action=status reports a job you launched. action=cancel stops a job and returns its ' +
+      'billing receipt; cancel as soon as you are done with the GPU. The gateway also cancels ' +
+      'anything still running when the run ends.',
     input_schema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['launch', 'status', 'cancel'] },
+        action: { type: 'string', enum: ['launch', 'run', 'status', 'cancel'] },
         job_id: {
           type: 'string',
-          description: 'Required for status and cancel. Must be a job this run launched.',
+          description: 'Required for run, status and cancel. Must be a job this run launched.',
         },
         duration_secs: {
           type: 'number',
           description: `Booking window for launch, ${MIN_DURATION_SECS} to ${cfg.maxDurationSecs} seconds. Defaults to ${defaultSecs}.`,
+        },
+        command: {
+          type: 'string',
+          description: 'For run: the shell command to execute on the GPU machine.',
+        },
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'For run: up to 8 sandbox files (4 MB in total) to copy into the working directory, keeping their relative paths.',
+        },
+        outputs: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'For run: up to 8 files the command writes, relative to the working directory, to bring back (32 MB in total).',
+        },
+        timeout_secs: {
+          type: 'number',
+          description:
+            'For run: stop the command after this many seconds if the booking allows longer.',
         },
       },
       required: ['action'],
@@ -125,22 +184,30 @@ export function toolsFor(cfg: ComputeConfig | null): Anthropic.Tool[] {
 
 export class AnthropicBackend implements CodingBackend {
   readonly id = 'anthropic' as const;
-  private readonly client: Anthropic;
+  private readonly client: AnthropicClient;
 
-  constructor(apiKey?: string) {
-    this.client = apiKey ? new Anthropic({ apiKey }) : new Anthropic();
+  constructor(apiKey?: string, client?: AnthropicClient) {
+    // A hidden SDK retry can be another billed request. The gateway records and
+    // bounds each generation attempt explicitly; retrying happens at that layer.
+    this.client = client ?? new Anthropic({ ...(apiKey ? { apiKey } : {}), maxRetries: 0 });
   }
 
-  async run(opts: {
-    input: string;
-    sandbox: Sandbox;
-    signal: AbortSignal;
-    emit: (e: GatewayEvent) => void;
-    recordComputeUsd?: (usd: number) => void;
-  }): Promise<{ output: string; usage: TokenUsage }> {
+  async run(opts: RunOptions): Promise<{ output: string; usage: TokenUsage }> {
     const { input, sandbox, signal, emit } = opts;
-    const compute = computeConfig ? new ComputeSession(computeConfig) : null;
-    const tools = toolsFor(computeConfig);
+    // A server-held token is not per-run consent. Only the server can construct
+    // and supply this session after validating the explicit dispatch grant.
+    if (Boolean(opts.computeSession) !== Boolean(opts.computeConfig)) {
+      throw new Error('GPU session and per-run configuration must be supplied together');
+    }
+    const compute = opts.computeSession ?? null;
+    const gpuRunner = compute ? (opts.gpuRunner ?? null) : null;
+    const tools = toolsFor(compute ? opts.computeConfig! : null);
+    const price = priceFor(config.model);
+    const budgetMicros = Math.floor(opts.maxProviderCostUsd * 1_000_000);
+    if (!Number.isSafeInteger(budgetMicros) || budgetMicros <= 0) {
+      throw new Error('Anthropic provider budget must be finite and positive');
+    }
+    let spentMicros = 0;
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: input }];
     const usage: TokenUsage = {
       inputTokens: 0,
@@ -156,33 +223,40 @@ export class AnthropicBackend implements CodingBackend {
       ? ({ type: 'adaptive', display: 'summarized' } as const)
       : ({ type: 'adaptive' } as const);
 
-    // Runs before the terminal event on every path, so a reaped workspace is
-    // named inside the run's output and not after it. The finally calls this
-    // again to catch an abort; once the run has ended a late retry still reaps,
-    // but stays silent so nothing is emitted past the terminal event.
-    let ended = false;
-    const settleCompute = async (): Promise<void> => {
-      const note = await reapNote(compute);
-      if (!note || ended) return;
-      emit({ type: 'message.delta', text: note });
-      finalText += note;
-    };
-
     try {
       for (let turn = 0; turn < MAX_TURNS; turn++) {
         if (signal.aborted) throw new Error('run aborted');
 
+        const request = {
+          model: config.model,
+          thinking,
+          system: [
+            { type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } },
+          ] as Anthropic.TextBlockParam[],
+          tools,
+          messages: withTurnCache(messages),
+        };
+        // Counting is non-generative. Price the entire prompt at the worst
+        // configured input/cache rate, including tool schemas and transcript.
+        // Token counts are estimates: leave 10% + 1024 input tokens of headroom.
+        const counted = await this.client.messages.countTokens(request, { signal, maxRetries: 0 });
+        const inputTokens = tokenCount(counted.input_tokens);
+        const reservedInput = Math.ceil(inputTokens * 1.1) + 1_024;
+        const inputMicros = Math.ceil(
+          reservedInput * Math.max(price.input, price.cacheWrite, price.cacheRead),
+        );
+        const maxTokens = Math.min(
+          MAX_TOKENS,
+          Math.floor((budgetMicros - spentMicros - inputMicros) / price.output),
+        );
+        if (!Number.isSafeInteger(maxTokens) || maxTokens < 1)
+          throw new Error('Anthropic provider budget exhausted before generation');
+        if (signal.aborted) throw new Error('run aborted');
+        await opts.recordProviderRequest?.();
+        if (signal.aborted) throw new Error('run aborted');
         const stream = this.client.messages.stream(
-          {
-            model: config.model,
-            max_tokens: MAX_TOKENS,
-            thinking,
-            output_config: { effort: config.effort },
-            system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
-            tools,
-            messages: withTurnCache(messages),
-          },
-          { signal },
+          { ...request, max_tokens: maxTokens, output_config: { effort: config.effort } },
+          { signal, maxRetries: 0 },
         );
 
         for await (const event of stream) {
@@ -196,10 +270,20 @@ export class AnthropicBackend implements CodingBackend {
 
         const message = await stream.finalMessage();
         const u = message.usage;
-        usage.inputTokens += u.input_tokens ?? 0;
-        usage.outputTokens += u.output_tokens ?? 0;
-        usage.cacheReadTokens += u.cache_read_input_tokens ?? 0;
-        usage.cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
+        const turnUsage: TokenUsage = {
+          inputTokens: tokenCount(u.input_tokens),
+          outputTokens: tokenCount(u.output_tokens),
+          cacheReadTokens: tokenCount(u.cache_read_input_tokens ?? 0),
+          cacheCreationTokens: tokenCount(u.cache_creation_input_tokens ?? 0),
+        };
+        usage.inputTokens += turnUsage.inputTokens;
+        usage.outputTokens += turnUsage.outputTokens;
+        usage.cacheReadTokens += turnUsage.cacheReadTokens;
+        usage.cacheCreationTokens += turnUsage.cacheCreationTokens;
+        spentMicros += usageMicros(turnUsage, price);
+        if (spentMicros > budgetMicros)
+          throw new Error('Anthropic usage exceeded the configured provider reservation');
+        if (signal.aborted) throw new Error('run aborted');
 
         messages.push({ role: 'assistant', content: message.content });
 
@@ -209,20 +293,23 @@ export class AnthropicBackend implements CodingBackend {
           .join('');
         if (text) finalText = text;
 
+        if (message.stop_reason === 'max_tokens')
+          throw new Error('Anthropic output token budget exhausted');
         if (message.stop_reason === 'pause_turn') continue;
 
         const toolUses = message.content.filter(
           (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
         );
         if (toolUses.length === 0) {
-          await settleCompute();
-          ended = true;
-          emit({ type: 'run.completed', output: finalText });
+          // The server owns cleanup, receipts, charging, and terminal events.
           return { output: finalText, usage };
         }
 
         const results: Anthropic.ToolResultBlockParam[] = [];
         for (const tu of toolUses) {
+          // Outside the tool-error catch: cancellation must stop dispatch,
+          // not become a recoverable tool result that allows a later launch.
+          if (signal.aborted) throw new Error('run aborted');
           // The daemon carries `preview` on tool.started only, and what an
           // operator needs from a GPU call (job, offer, booked maximum, receipt)
           // exists only after it returns. So the GPU frame is emitted late, still
@@ -233,10 +320,10 @@ export class AnthropicBackend implements CodingBackend {
           let isError = false;
           let out = '';
           try {
-            out = await execTool(tu, sandbox, emit, compute);
+            out = await execTool(tu, sandbox, emit, compute, gpuRunner);
           } catch (e) {
             isError = true;
-            out = `error: ${(e as Error).message}`;
+            out = e instanceof GpuWorkloadError ? e.toolResult : `error: ${(e as Error).message}`;
           }
           if (late) {
             emit({
@@ -261,29 +348,23 @@ export class AnthropicBackend implements CodingBackend {
         messages.push({ role: 'user', content: results });
       }
 
-      await settleCompute();
-      ended = true;
-      emit({ type: 'run.failed', error: `exceeded ${MAX_TURNS} turns` });
-      return { output: finalText, usage };
-    } finally {
-      // Success, failure, or abort: never leak a billed workspace past the run.
-      await settleCompute();
-      const committed = compute?.committedUsd() ?? 0;
-      if (committed > 0) {
-        console.log(`gpu_workspace committed $${committed.toFixed(4)}`);
-        // Reported here rather than through the return value so an aborted or
-        // failed run still charges the GPU spend it already committed.
-        opts.recordComputeUsd?.(committed);
-      }
+      throw new Error(`exceeded ${MAX_TURNS} Anthropic turns`);
+    } catch (error) {
+      // Complete prior usage is useful evidence, but it cannot settle an
+      // interrupted provider request. The server retains that reservation.
+      const failure = error instanceof Error ? error : new Error('Anthropic run failed');
+      Object.assign(failure, { usage: { ...usage } });
+      throw failure;
     }
   }
 }
 
-export async function reapNote(compute: ComputeSession | null): Promise<string> {
-  if (!compute) return '';
-  const reaped = await compute.reap();
-  if (reaped.length === 0) return '';
-  return `\n[gpu_workspace cancelled at run end: ${reaped.join(', ')}]`;
+/** Format an existing cleanup report; never perform cleanup from a backend. */
+export function reapNote(report: ComputeCleanupReport | null): string {
+  if (!report || (report.settled.length === 0 && report.complete)) return '';
+  if (!report.complete)
+    return '\n[gpu_workspace cleanup pending; final receipts are not confirmed]';
+  return `\n[gpu_workspace settled at run end: ${report.settled.map((job) => job.job_id).join(', ')}]`;
 }
 
 /**
@@ -346,7 +427,14 @@ export function computePreview(
   } catch {
     return action;
   }
-  const parts = [action, `job=${String(job.job_id ?? '?')}`, `status=${String(job.status ?? '?')}`];
+  const parts = [action, `job=${String(job.job_id ?? '?')}`];
+  if (action === 'run') {
+    parts.push(`exit=${String(job.exit_code ?? 'none')}`);
+    if (job.timed_out === true) parts.push('timed_out');
+    if (Array.isArray(job.outputs)) parts.push(`outputs=${job.outputs.length}`);
+    return parts.join(' ');
+  }
+  parts.push(`status=${String(job.status ?? '?')}`);
   if (job.offer_id !== undefined) parts.push(`offer=${String(job.offer_id)}`);
   if (job.maximum_usdc_micros !== undefined) {
     parts.push(`booked_max_usdc_micros=${String(job.maximum_usdc_micros)}`);
@@ -364,6 +452,7 @@ export async function execTool(
   sandbox: Sandbox,
   emit: (e: GatewayEvent) => void,
   compute: ComputeSession | null = null,
+  gpuRunner: GpuRunner | null = null,
 ): Promise<string> {
   const input = tu.input as Record<string, unknown>;
   switch (tu.name) {
@@ -379,16 +468,23 @@ export async function execTool(
           maximum_usdc_micros: job.maximum_usdc_micros,
         });
       }
+      if (action === 'run') {
+        if (!gpuRunner) throw new Error('running commands on a GPU is not enabled on this gateway');
+        return gpuRunner.run(input, sandbox);
+      }
       if (action !== 'status' && action !== 'cancel') {
-        throw new Error(`gpu_workspace action must be launch, status, or cancel: got ${action}`);
+        throw new Error(
+          `gpu_workspace action must be launch, run, status, or cancel: got ${action}`,
+        );
       }
       const jobId = String(input.job_id ?? '');
       if (!jobId) throw new Error('job_id is required');
       const job = action === 'cancel' ? await compute.cancel(jobId) : await compute.status(jobId);
+      // The workspace address carries a live token and stays inside the gateway.
       return JSON.stringify({
         job_id: job.id,
         status: job.status,
-        access_url: job.access_url,
+        ready: job.status === 'running' && Boolean(job.access_url),
         error: job.error,
         receipt: job.receipt,
       });

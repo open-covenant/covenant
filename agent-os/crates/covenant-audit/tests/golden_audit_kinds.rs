@@ -109,6 +109,7 @@ const EXPECTED_KINDS: &[&str] = &[
     "spend_settled",
     "escrow_completion_proven",
     "escrow_released",
+    "legacy_capability_check",
 ];
 
 /// The serde discriminator for one audit kind. A wildcard-free `match`: adding
@@ -166,6 +167,7 @@ fn audit_kind_slug(kind: &AuditKind) -> &'static str {
         AuditKind::ToolCallCompleted { .. } => "tool_call_completed",
         AuditKind::ToolCallSchemaRejected { .. } => "tool_call_schema_rejected",
         AuditKind::CapabilityBudgetExhausted { .. } => "capability_budget_exhausted",
+        AuditKind::LegacyCapabilityCheck { .. } => "legacy_capability_check",
     }
 }
 
@@ -635,6 +637,15 @@ fn golden_audit_kind_records() -> Vec<AuditEvent> {
                 network: "solana".into(),
                 provider: "orbserv".into(),
                 tx_sig: Some("2Zq7Xs9wV3kLp8mNc1bR4tYd6uHf".into()),
+            },
+        ),
+        event(
+            49,
+            AuditKind::LegacyCapabilityCheck {
+                agent_id: "agent@local".into(),
+                required_actions: vec!["memory.read".into()],
+                missing_actions: vec![],
+                passed: true,
             },
         ),
     ]

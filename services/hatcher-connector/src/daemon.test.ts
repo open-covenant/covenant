@@ -121,6 +121,26 @@ describe('HttpDaemonClient response guards', () => {
 // text/sources fields. connector.test.ts only drives a FakeDaemon, so the real
 // mapping is otherwise uncovered.
 describe('HttpDaemonClient submitIntent', () => {
+  it('forwards the stable execution policy unchanged in POST /intent', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ intent_id: 'gpu-1', status: 'running' }));
+    vi.stubGlobal('fetch', fetcher);
+    const execution = { run_key: 'a'.repeat(64), max_cost_usd: 0.50, gpu: { max_usdc_micros: 200_000, duration_secs: 300, max_launches: 1 } };
+    await client().submitIntent('GPU smoke', execution);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('http://daemon.local/intent');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ text: 'GPU smoke', execution });
+  });
+
+  it('sends a real stop request without interpreting acceptance as cleanup completion', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ status: 'stopping', intent_id: 'gpu-1' }));
+    vi.stubGlobal('fetch', fetcher);
+    await expect(client().stopIntent('gpu-1')).resolves.toEqual({ status: 'stopping', intent_id: 'gpu-1' });
+    const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('http://daemon.local/intents/gpu-1/stop');
+    expect(init.method).toBe('POST');
+  });
+
   it('surfaces the daemon error message on a rejected intent', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ kind: 'error', message: 'policy denied' })));
 
@@ -155,7 +175,7 @@ describe('HttpDaemonClient submitIntent', () => {
 });
 
 // streamEvents parses the daemon's SSE trace stream and forwards only well-formed
-// stream_chunk frames to the mesh. It must skip keepalive comments, ignore
+// raw AgentEvent frames to the mesh. It must skip keepalive comments, ignore
 // stream_begin/stream_end and malformed frames, and reassemble a frame split
 // across read() boundaries. Uncovered: connector.test.ts drives a FakeDaemon.
 describe('HttpDaemonClient streamEvents', () => {
@@ -179,16 +199,16 @@ describe('HttpDaemonClient streamEvents', () => {
     return events;
   }
 
-  it('forwards only well-formed stream_chunk frames', async () => {
+  it('forwards only well-formed raw AgentEvent frames', async () => {
     const events = await collect([
       ': keepalive\n\n',
       frame({ kind: 'stream_begin' }),
-      frame({ kind: 'stream_chunk', chunk: { type: 'tool_use', name: 'x' } }),
+      frame({ type: 'tool_use', name: 'x' }),
       frame({ kind: 'stream_chunk' }),
       frame({ kind: 'stream_chunk', chunk: { text: 'no type' } }),
       frame({ kind: 'control', chunk: { type: 'sneaky' } }),
       'data: not-json\n\n',
-      frame({ kind: 'stream_chunk', chunk: { type: 'text', text: 'hi' } }),
+      frame({ type: 'text', text: 'hi' }),
       frame({ kind: 'stream_end' }),
     ]);
     expect(events).toEqual([
@@ -197,10 +217,10 @@ describe('HttpDaemonClient streamEvents', () => {
     ]);
   });
 
-  it('reassembles a stream_chunk frame split across read boundaries', async () => {
+  it('reassembles a raw AgentEvent frame split across read boundaries', async () => {
     const events = await collect([
-      'data: {"kind":"stream_chunk","chunk":{"type":"te',
-      'xt","text":"hi"}}\n\n',
+      'data: {"type":"te',
+      'xt","text":"hi"}\n\n',
     ]);
     expect(events).toEqual([{ type: 'text', text: 'hi' }]);
   });

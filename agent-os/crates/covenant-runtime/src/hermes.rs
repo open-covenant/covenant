@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::{AgentResult, Runner, RunnerError, RuntimeTrace};
+use crate::{AgentResult, ExecutionOptions, Runner, RunnerError, RuntimeTrace};
 
 /// Default polling cadence while waiting for a run to reach a terminal
 /// state. Hermes does not push us over the wire on the status endpoint,
@@ -59,6 +59,14 @@ pub struct HermesRunner {
     /// When set, each runtime trace is streamed here as it arrives (for the
     /// daemon's live audit fold) instead of only being returned in bulk.
     event_tx: Option<crate::RuntimeEventSink>,
+    active: Mutex<std::collections::HashMap<uuid::Uuid, ActiveRun>>,
+}
+
+#[derive(Default)]
+struct ActiveRun {
+    run_id: Option<String>,
+    stop_requested: bool,
+    stop_acknowledged: bool,
 }
 
 impl HermesRunner {
@@ -84,6 +92,7 @@ impl HermesRunner {
             api_key,
             http,
             event_tx: None,
+            active: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -113,18 +122,31 @@ impl HermesRunner {
         }
     }
 
-    async fn submit(&self, intent: &Intent) -> Result<String, RunnerError> {
+    async fn submit(
+        &self,
+        intent: &Intent,
+        options: Option<&ExecutionOptions>,
+    ) -> Result<String, RunnerError> {
         let url = format!("{}/runs", self.base_url);
-        let body = json!({
+        let session_id = options
+            .map(|o| o.run_key.clone())
+            .unwrap_or_else(|| intent.id.to_string());
+        let mut body = json!({
             "input": intent.text,
-            "session_id": intent.id.to_string(),
+            "session_id": session_id,
         });
+        if let Some(options) = options {
+            body["max_cost_usd"] = json!(options.max_cost_usd);
+            if let Some(gpu) = &options.gpu {
+                body["gpu"] = json!(gpu);
+            }
+        }
         let resp = self
             .apply_auth(self.http.post(&url).json(&body))
             // Hermes dedupes identical submissions in a five-minute
             // window when an Idempotency-Key is present, which lets a
             // covenantd restart mid-dispatch reattach to the same run.
-            .header("Idempotency-Key", intent.id.to_string())
+            .header("Idempotency-Key", session_id)
             .send()
             .await
             .map_err(remote_err)?;
@@ -141,7 +163,52 @@ impl HermesRunner {
                 source,
                 stderr: String::new(),
             })?;
-        Ok(body.run_id)
+        Self::validate_run_id(body.run_id)
+    }
+
+    fn validate_run_id(run_id: String) -> Result<String, RunnerError> {
+        if run_id.is_empty()
+            || run_id.len() > 128
+            || !run_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+        {
+            return Err(RunnerError::RunFailed {
+                message: "gateway returned an invalid run id".into(),
+            });
+        }
+        Ok(run_id)
+    }
+
+    /// Read-only recovery after an ambiguous submission. Repeating POST could
+    /// start a previously unaccepted run after a stop request, so reconciliation
+    /// must never create work. A missing session is still an unknown outcome.
+    async fn lookup_session(&self, session_id: &str) -> Result<Option<String>, RunnerError> {
+        let response = self
+            .apply_auth(
+                self.http
+                    .get(format!("{}/run-sessions/{}", self.base_url, session_id)),
+            )
+            .send()
+            .await
+            .map_err(remote_err)?;
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let text = read_capped(response, MAX_RESPONSE_BYTES).await?;
+        if !status.is_success() {
+            return Err(RunnerError::Remote {
+                status: status.as_u16(),
+                message: truncate(&text, 512),
+            });
+        }
+        let body: HermesRunCreated =
+            serde_json::from_str(&text).map_err(|source| RunnerError::MalformedStdout {
+                source,
+                stderr: String::new(),
+            })?;
+        Self::validate_run_id(body.run_id).map(Some)
     }
 
     async fn poll(&self, run_id: &str) -> Result<HermesRunStatus, RunnerError> {
@@ -204,17 +271,102 @@ impl HermesRunner {
             }
         }
     }
+
+    async fn request_stop(&self, intent_id: uuid::Uuid) -> Result<(), RunnerError> {
+        let run_id = {
+            let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
+            // A stop can race with the spawned runner or the POST response.
+            let run = active.entry(intent_id).or_default();
+            run.stop_requested = true;
+            if run.stop_acknowledged {
+                return Ok(());
+            }
+            run.run_id.clone()
+        };
+        let Some(run_id) = run_id else {
+            return Ok(());
+        };
+        let response = self
+            .apply_auth(
+                self.http
+                    .post(format!("{}/runs/{}/stop", self.base_url, run_id)),
+            )
+            .send()
+            .await
+            .map_err(remote_err)?;
+        if !response.status().is_success() {
+            return Err(RunnerError::Remote {
+                status: response.status().as_u16(),
+                message: "gateway stop was not acknowledged; cleanup is pending".into(),
+            });
+        }
+        if let Some(run) = self
+            .active
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(&intent_id)
+        {
+            run.stop_acknowledged = true;
+        }
+        Ok(())
+    }
 }
 
-#[async_trait]
-impl Runner for HermesRunner {
-    async fn run(&self, card: &AgentCard, intent: &Intent) -> Result<AgentResult, RunnerError> {
+impl HermesRunner {
+    async fn run_inner(
+        &self,
+        card: &AgentCard,
+        intent: &Intent,
+        options: Option<&ExecutionOptions>,
+    ) -> Result<AgentResult, RunnerError> {
         self.ensure_allowed(card)?;
+
+        if let Some(options) = options {
+            options
+                .validate()
+                .map_err(|message| RunnerError::RunFailed {
+                    message: message.into(),
+                })?;
+        }
+        {
+            let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
+            if active.entry(intent.id).or_default().stop_requested {
+                return Err(RunnerError::RunCancelled);
+            }
+        }
 
         let budget = Duration::from_millis(card.manifest.resources.cpu_ms_per_task);
         let deadline = Instant::now() + budget;
 
-        let run_id = self.submit(intent).await?;
+        // Once POST has an ambiguous outcome, only look up its stable session.
+        // A second POST could start work after the caller has requested a stop.
+        let run_id = match self.submit(intent, options).await {
+            Ok(id) => id,
+            Err(first) if options.is_some() => {
+                if matches!(
+                    &first,
+                    RunnerError::Remote {
+                        status: 400 | 401 | 403 | 404 | 409 | 413 | 422 | 429,
+                        ..
+                    }
+                ) {
+                    return Err(first);
+                }
+                warn!(intent_id = %intent.id, error = %first, "gateway submission outcome unknown; read-only session reconciliation remains pending");
+                let session_id = &options.unwrap().run_key;
+                loop {
+                    if let Ok(Some(id)) = self.lookup_session(session_id).await {
+                        break id;
+                    }
+                    tokio::time::sleep(MAX_POLL_BACKOFF).await;
+                }
+            }
+            Err(error) => return Err(error),
+        };
+        {
+            let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
+            active.entry(intent.id).or_default().run_id = Some(run_id.clone());
+        }
         debug!(%run_id, agent = %card.id, "hermes run submitted");
 
         // Spawn the SSE subscriber in parallel with status polling. The
@@ -233,7 +385,15 @@ impl Runner for HermesRunner {
             budget,
         );
 
-        let outcome = self.poll_until_terminal(&run_id, deadline, budget).await;
+        let outcome = self
+            .poll_until_terminal(
+                &run_id,
+                deadline,
+                budget,
+                intent.id,
+                options.is_some_and(|o| o.gpu.is_some()),
+            )
+            .await;
 
         // Stop the SSE task; if it's still streaming when the run finishes
         // we don't need any further events.
@@ -273,17 +433,59 @@ impl Runner for HermesRunner {
             }),
             // Agent outcomes — distinct from transport faults so the daemon
             // can tell "the run failed" from "the gateway broke".
-            Ok(RunOutcome::Failed { message }) => Err(RunnerError::RunFailed { message }),
-            Ok(RunOutcome::Cancelled) => Err(RunnerError::RunCancelled),
+            Ok(RunOutcome::Failed { message, output }) => match output {
+                Some(output) if !output.is_empty() => {
+                    Err(RunnerError::RunFailedWithOutput { message, output })
+                }
+                _ => Err(RunnerError::RunFailed { message }),
+            },
+            Ok(RunOutcome::Cancelled { output }) => match output {
+                Some(output) if !output.is_empty() => {
+                    Err(RunnerError::RunCancelledWithOutput { output })
+                }
+                _ => Err(RunnerError::RunCancelled),
+            },
             Err(e) => Err(e),
         }
     }
 }
 
+#[async_trait]
+impl Runner for HermesRunner {
+    async fn run(&self, card: &AgentCard, intent: &Intent) -> Result<AgentResult, RunnerError> {
+        self.run_with_options(card, intent, None).await
+    }
+
+    async fn run_with_options(
+        &self,
+        card: &AgentCard,
+        intent: &Intent,
+        options: Option<&ExecutionOptions>,
+    ) -> Result<AgentResult, RunnerError> {
+        let result = self.run_inner(card, intent, options).await;
+        self.active
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&intent.id);
+        result
+    }
+
+    async fn cancel_intent(&self, intent_id: uuid::Uuid) -> Result<(), RunnerError> {
+        self.request_stop(intent_id).await
+    }
+}
+
 enum RunOutcome {
-    Completed { output: String },
-    Failed { message: String },
-    Cancelled,
+    Completed {
+        output: String,
+    },
+    Failed {
+        message: String,
+        output: Option<String>,
+    },
+    Cancelled {
+        output: Option<String>,
+    },
 }
 
 impl HermesRunner {
@@ -323,13 +525,32 @@ impl HermesRunner {
         run_id: &str,
         deadline: Instant,
         budget: Duration,
+        intent_id: uuid::Uuid,
+        wait_for_cleanup: bool,
     ) -> Result<RunOutcome, RunnerError> {
         let mut consecutive_failures: u32 = 0;
+        let mut deadline_stop_requested = false;
         loop {
-            if Instant::now() >= deadline {
+            if !deadline_stop_requested && Instant::now() >= deadline {
                 warn!(%run_id, ?budget, "hermes run timed out — stopping");
-                self.cancel(run_id).await;
-                return Err(RunnerError::Timeout(budget));
+                if !wait_for_cleanup {
+                    self.cancel(run_id).await;
+                    return Err(RunnerError::Timeout(budget));
+                }
+                deadline_stop_requested = true;
+                let _ = self.request_stop(intent_id).await;
+            }
+            let (stop_requested, stop_acknowledged) = self
+                .active
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get(&intent_id)
+                .map(|r| (r.stop_requested, r.stop_acknowledged))
+                .unwrap_or_default();
+            if stop_requested && !stop_acknowledged {
+                // Retry cancellation until the gateway acknowledges it;
+                // polling still decides when cleanup has reached a terminal state.
+                let _ = self.request_stop(intent_id).await;
             }
             let status = match self.poll(run_id).await {
                 Ok(status) => {
@@ -337,9 +558,17 @@ impl HermesRunner {
                     status
                 }
                 Err(e) => {
-                    consecutive_failures += 1;
+                    consecutive_failures = consecutive_failures.saturating_add(1);
                     if consecutive_failures > MAX_CONSECUTIVE_POLL_FAILURES {
-                        warn!(%run_id, failures = consecutive_failures, error = %e, "hermes poll failed repeatedly — giving up");
+                        warn!(%run_id, failures = consecutive_failures, error = %e, "hermes poll failed repeatedly");
+                        if wait_for_cleanup {
+                            let _ = self.request_stop(intent_id).await;
+                            // The gateway owns durable reconciliation. Keep the
+                            // intent active until its receipt is terminal; a
+                            // transport outage is not evidence of cancellation.
+                            tokio::time::sleep(MAX_POLL_BACKOFF).await;
+                            continue;
+                        }
                         return Err(e);
                     }
                     // A single blip shouldn't kill a long run. Back off
@@ -364,10 +593,13 @@ impl HermesRunner {
                         message: status
                             .error
                             .unwrap_or_else(|| "hermes run failed".to_string()),
+                        output: status.output,
                     });
                 }
                 "cancelled" => {
-                    return Ok(RunOutcome::Cancelled);
+                    return Ok(RunOutcome::Cancelled {
+                        output: status.output,
+                    });
                 }
                 // "queued" | "running" | "waiting_for_approval" | "stopping" → keep polling
                 _ => {
@@ -1869,6 +2101,235 @@ mod behavioral {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
+    fn gpu_options() -> ExecutionOptions {
+        ExecutionOptions {
+            run_key: "hatcher-agent-dispatch-1".into(),
+            max_cost_usd: 1.0,
+            gpu: Some(crate::GpuExecutionPolicy {
+                max_usdc_micros: 200_000,
+                duration_secs: 300,
+                max_launches: 1,
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn gpu_execution_forwards_authorization_and_stable_idempotency_key() {
+        let server = MockServer::start().await;
+        mount_submit(&server, "gpu-run").await;
+        Mock::given(method("GET"))
+            .and(path("/runs/gpu-run"))
+            .respond_with(completed(
+                "settled GPU receipt: charged 100000 refunded 100000",
+            ))
+            .mount(&server)
+            .await;
+        let output = runner(&server)
+            .run_with_options(&hermes_card(5_000), &intent(), Some(&gpu_options()))
+            .await
+            .unwrap();
+        assert!(output.text.contains("settled GPU receipt"));
+        let requests = server.received_requests().await.unwrap();
+        let submission = requests
+            .iter()
+            .find(|r| r.method == "POST" && r.url.path() == "/runs")
+            .unwrap();
+        let body: Value = serde_json::from_slice(&submission.body).unwrap();
+        assert_eq!(body["session_id"], "hatcher-agent-dispatch-1");
+        assert_eq!(body["max_cost_usd"], 1.0);
+        assert_eq!(
+            body["gpu"],
+            json!({ "max_usdc_micros": 200000, "duration_secs": 300, "max_launches": 1 })
+        );
+        assert_eq!(
+            submission.headers.get("idempotency-key").unwrap(),
+            "hatcher-agent-dispatch-1"
+        );
+    }
+
+    struct StoppingThenCancelled(AtomicUsize);
+    impl Respond for StoppingThenCancelled {
+        fn respond(&self, _: &Request) -> ResponseTemplate {
+            if self.0.fetch_add(1, Ordering::SeqCst) < 2 {
+                ResponseTemplate::new(200).set_body_json(json!({ "status": "stopping" }))
+            } else {
+                ResponseTemplate::new(200).set_body_json(json!({ "status": "cancelled", "output": "GPU settled: charged 0; refunded 200000" }))
+            }
+        }
+    }
+
+    struct MissingSessionThenRecovered(AtomicUsize);
+    impl Respond for MissingSessionThenRecovered {
+        fn respond(&self, _: &Request) -> ResponseTemplate {
+            if self.0.fetch_add(1, Ordering::SeqCst) < 2 {
+                ResponseTemplate::new(404)
+            } else {
+                ResponseTemplate::new(200).set_body_json(json!({ "run_id": "gpu-run" }))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_gpu_submission_never_recovers_a_conflicting_session() {
+        for rejected_status in [409, 429] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/runs"))
+                .respond_with(ResponseTemplate::new(rejected_status))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = runner(&server)
+                .run_with_options(&hermes_card(5_000), &intent(), Some(&gpu_options()))
+                .await;
+            assert!(
+                matches!(result, Err(RunnerError::Remote { status, .. }) if status == rejected_status)
+            );
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(
+                requests.len(),
+                1,
+                "a definitive rejection must not attach to an earlier run"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ambiguous_gpu_submission_recovers_read_only_and_honors_stop() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/runs"))
+            .respond_with(ResponseTemplate::new(502))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/run-sessions/hatcher-agent-dispatch-1"))
+            .respond_with(MissingSessionThenRecovered(AtomicUsize::new(0)))
+            .expect(3)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/runs/gpu-run/stop"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/runs/gpu-run"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "cancelled", "output": "GPU settled: charged 0; refunded 200000"
+            })))
+            .mount(&server)
+            .await;
+        let runner = Arc::new(runner(&server));
+        let task_runner = runner.clone();
+        let task = tokio::spawn(async move {
+            task_runner
+                .run_with_options(&hermes_card(10_000), &intent(), Some(&gpu_options()))
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|r| r.url.path().contains("run-sessions"))
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        runner.cancel_intent(intent().id).await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(8), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(result, Err(RunnerError::RunCancelledWithOutput { output }) if output.contains("refunded 200000"))
+        );
+    }
+
+    #[tokio::test]
+    async fn gpu_stop_during_submit_waits_for_terminal_receipt() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/runs"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(200))
+                    .set_body_json(json!({ "run_id": "gpu-run" })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/runs/gpu-run/stop"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "status": "stopping" })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/runs/gpu-run"))
+            .respond_with(StoppingThenCancelled(AtomicUsize::new(0)))
+            .expect(3)
+            .mount(&server)
+            .await;
+        let runner = Arc::new(runner(&server));
+        let task_runner = runner.clone();
+        let task = tokio::spawn(async move {
+            task_runner
+                .run_with_options(&hermes_card(5_000), &intent(), Some(&gpu_options()))
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|r| r.url.path() == "/runs")
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // No gateway run id exists locally yet; this must be remembered.
+        runner.cancel_intent(intent().id).await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+        match result {
+            Err(RunnerError::RunCancelledWithOutput { output }) => {
+                assert!(output.contains("refunded 200000"))
+            }
+            other => panic!("expected terminal cancellation receipt, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn gpu_stop_before_runner_starts_does_not_submit() {
+        let server = MockServer::start().await;
+        let runner = runner(&server);
+        runner.cancel_intent(intent().id).await.unwrap();
+        assert!(matches!(
+            runner
+                .run_with_options(&hermes_card(5_000), &intent(), Some(&gpu_options()))
+                .await,
+            Err(RunnerError::RunCancelled)
+        ));
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
     fn hermes_card(budget_ms: u64) -> AgentCard {
         let toml = format!(
             r#"
@@ -2104,6 +2565,64 @@ network = "off"
             RunnerError::RunFailed { message } => assert_eq!(message, "compiler exploded"),
             other => panic!("expected RunFailed, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn failed_status_retains_final_output_separately_from_error() {
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        let output = "[gpu_workspace final receipts: [{\"job_id\":\"original-job\",\"receipt\":{\"charged_usdc_micros\":123,\"refunded_usdc_micros\":199877}}]]\n[run accounting: {\"total_usd\":0.12}]";
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "failed", "error": "GPU command timed out", "output": output
+            })))
+            .mount(&server)
+            .await;
+
+        let err = runner(&server)
+            .run_with_options(&hermes_card(30_000), &intent(), Some(&gpu_options()))
+            .await
+            .expect_err("settled cleanup does not make a failed workload successful");
+        assert_eq!(err.to_string(), "remote run failed: GPU command timed out");
+        match err {
+            RunnerError::RunFailedWithOutput {
+                message,
+                output: retained,
+            } => {
+                assert_eq!(message, "GPU command timed out");
+                assert_eq!(retained, output);
+            }
+            other => panic!("expected failure with final evidence, got {other:?}"),
+        }
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method == "POST" && r.url.path() == "/runs")
+                .count(),
+            1,
+            "retrieving failure evidence must never submit a replacement run"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_status_with_empty_output_keeps_legacy_error() {
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "failed", "error": "compiler exploded", "output": ""
+            })))
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            runner(&server).run(&hermes_card(30_000), &intent()).await,
+            Err(RunnerError::RunFailed { message }) if message == "compiler exploded"
+        ));
     }
 
     #[tokio::test]

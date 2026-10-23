@@ -10,6 +10,10 @@ const ENV_KEYS = [
   "COVENANT_DAEMON_URL",
   "HATCHER_MESH_URL",
   "HATCHER_PAIRING_CODE",
+  "HATCHER_AGENT_ID",
+  "HATCHER_GPU_ENABLED",
+  "HATCHER_RECONNECT_BASE_MS",
+  "HATCHER_RECONNECT_MAX_MS",
   "PORT",
   "HATCHER_CONNECTOR_PORT",
   "HATCHER_MAX_CONCURRENT_DISPATCH",
@@ -32,7 +36,7 @@ async function loadConfig(): Promise<typeof import("./config.js")> {
 describe("loadConfig env validation", () => {
   beforeEach(() => {
     for (const k of ENV_KEYS) saved[k] = process.env[k];
-    for (const k of Object.keys(BASE)) delete process.env[k];
+    for (const k of ENV_KEYS) delete process.env[k];
     Object.assign(process.env, BASE);
   });
 
@@ -50,6 +54,33 @@ describe("loadConfig env validation", () => {
     expect(cfg.daemonUrl).toBe("http://127.0.0.1:8421");
     expect(cfg.usingConnectorPeer).toBe(false);
     expect(cfg.daemonToken).toBe(BASE.COVENANT_OPERATOR_TOKEN);
+    expect(cfg.gpuEnabled).toBe(false);
+    expect(cfg.hatcherReconnectBaseMs).toBe(30_000);
+    expect(cfg.hatcherReconnectMaxMs).toBe(300_000);
+  });
+
+  it('accepts slower reconnect bounds and rejects unsafe or inverted bounds', async () => {
+    const { loadConfig: load } = await loadConfig();
+    process.env.HATCHER_RECONNECT_BASE_MS = '60000';
+    process.env.HATCHER_RECONNECT_MAX_MS = '600000';
+    expect(load()).toMatchObject({ hatcherReconnectBaseMs: 60_000, hatcherReconnectMaxMs: 600_000 });
+    process.env.HATCHER_RECONNECT_BASE_MS = '29999';
+    expect(() => load()).toThrow(/HATCHER_RECONNECT_BASE_MS/);
+    process.env.HATCHER_RECONNECT_BASE_MS = '60000';
+    process.env.HATCHER_RECONNECT_MAX_MS = '59999';
+    expect(() => load()).toThrow(/HATCHER_RECONNECT_MAX_MS/);
+    process.env.HATCHER_RECONNECT_MAX_MS = '9007199254740992';
+    expect(() => load()).toThrow(/HATCHER_RECONNECT_MAX_MS/);
+  });
+
+  it('requires an exact agent configuration when GPU dispatches are enabled', async () => {
+    const { loadConfig: load } = await loadConfig();
+    process.env.HATCHER_GPU_ENABLED = 'true';
+    expect(() => load()).toThrow(/HATCHER_AGENT_ID/);
+    process.env.HATCHER_AGENT_ID = 'full-agent';
+    expect(load()).toMatchObject({ gpuEnabled: true, agentId: 'full-agent' });
+    process.env.HATCHER_GPU_ENABLED = 'maybe';
+    expect(() => load()).toThrow(/HATCHER_GPU_ENABLED/);
   });
 
   describe("HATCHER_CONNECTOR_TOKEN", () => {

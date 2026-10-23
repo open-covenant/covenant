@@ -52,7 +52,55 @@ The 6 integration deliverables for the Hatcher team: [`docs/hatcher-handoff.md`]
 | `HATCHER_MANIFEST` | no (path to a manifest JSON) | — |
 | `HATCHER_PAIRING_CODE` | no | — |
 | `HATCHER_AGENT_ID` | no | — |
+| `HATCHER_GPU_ENABLED` | no (requires full `HATCHER_AGENT_ID` when enabled) | `false` |
+| `HATCHER_ARTIFACT_ORIGIN` | no (private coding-gateway origin; enables `GET /artifacts/:token/:name`) | — |
 | `PORT` | no | `8790` |
+
+## Bounded GPU smoke dispatch
+
+GPU execution is disabled by default. Setting `HATCHER_GPU_ENABLED=true` only
+arms the connector: each GPU dispatch must still match the configured full
+`HATCHER_AGENT_ID` and carry exactly one explicit consent grant:
+
+```json
+{
+  "scope": "compute.gpu_workspace",
+  "constraints": {
+    "max_usdc_micros": 200000,
+    "duration_secs": 300,
+    "max_launches": 1
+  }
+}
+```
+
+The smoke dispatch must explicitly set `intent.context.max_cost_usd` to `0.50`.
+Optional `intent.context.gpu` may only be `{ "duration_secs": 300 }`; context
+cannot authorize GPU use. Unsupported GPU scopes, duplicate grants, additional
+constraints, wider bounds, and other agent ids are rejected before any daemon
+grant or submission. The connector mints `compute.gpu_workspace` with the same
+bounds and forwards an `execution` policy in `POST /intent`. Its `run_key` is a
+stable SHA-256 digest of the complete `[agent_id, dispatch_id]` JSON tuple, so
+gateway persistence can deduplicate reconnects and retries. Ordinary dispatches
+carry no GPU policy. Their total cap defaults to $0.50 and any supplied cap must
+be finite, positive, and no greater than $1.
+
+Cancellation sends `POST /intents/:id/stop`; acceptance means stopping, not
+completion. The connector retains the dispatch and polls until a confirmed
+terminal result, including through `stopping` and missing/failed result reads.
+At a deadline it requests the same workload stop. An unconfirmed stop or timeout
+emits `cleanup_pending`, retains the slot, and never fabricates a cancelled
+receipt. An ambiguous submit timeout also retains its slot for reconciliation.
+
+GPU jobs can return files. The coding gateway keeps them on its private disk
+and links them at this service's `/artifacts/:token/:name`, which forwards to
+`HATCHER_ARTIFACT_ORIGIN` and streams the file back with its SHA-256 in
+`x-content-sha256`. The random token in the path is the only authorization.
+
+`/healthz` separately reports `mesh.socket`, `mesh.authentication` (unverified
+until a documented acknowledgement exists), reconnect attempts, and whether GPU
+dispatches are armed. Opening the socket and sending `hello` are not proof of
+authentication, pairing, or end-to-end execution. Raw socket errors and inbound
+payloads are not logged.
 
 ## Dev
 

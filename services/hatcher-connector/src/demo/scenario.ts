@@ -50,6 +50,8 @@ export class ScriptedDaemon implements DaemonClient {
     };
   }
 
+  async stopIntent(): Promise<unknown> { return { stopped: true }; }
+
   async streamEvents(_id: string, onEvent: (e: AgentEvent) => void): Promise<void> {
     for (const e of this.events) onEvent(e);
   }

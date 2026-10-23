@@ -28,6 +28,18 @@ export interface IntentResult {
   sources: string[];
 }
 
+export interface GpuExecution {
+  max_usdc_micros: number;
+  duration_secs: number;
+  max_launches: number;
+}
+
+export interface IntentExecution {
+  run_key: string;
+  max_cost_usd: number;
+  gpu?: GpuExecution;
+}
+
 // /audit/verify report.
 export interface IntegrityReport {
   events: number;
@@ -109,7 +121,8 @@ const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface DaemonClient {
   health(): Promise<boolean>;
-  submitIntent(text: string): Promise<IntentResult>;
+  submitIntent(text: string, execution?: IntentExecution): Promise<IntentResult>;
+  stopIntent(intentId: string): Promise<unknown>;
   intentResult(intentId: string): Promise<unknown>;
   streamEvents(intentId: string, onEvent: (e: AgentEvent) => void, signal: AbortSignal): Promise<void>;
   verify(): Promise<IntegrityReport>;
@@ -168,11 +181,11 @@ export class HttpDaemonClient implements DaemonClient, A2ADaemon {
   }
 
   // POST /intent { text }  -> IntentResult  (http.rs:279, :303)
-  async submitIntent(text: string): Promise<IntentResult> {
+  async submitIntent(text: string, execution?: IntentExecution): Promise<IntentResult> {
     const body = (await this.fetchJson('/intent', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, ...(execution ? { execution } : {}) }),
     })) as Partial<IntentResult> & { kind?: string; message?: string };
     if (body.kind === 'error') throw new Error(`daemon intent error: ${body.message ?? 'unknown'}`);
     if (typeof body.intent_id !== 'string' || typeof body.status !== 'string') {
@@ -189,7 +202,11 @@ export class HttpDaemonClient implements DaemonClient, A2ADaemon {
   // GET /intents/:id/result -> Response::IntentResult { intent_id, status, text, sources, settlement? }
   // (same shape as POST /intent; verified covenant-ipc Response::IntentResult)
   async intentResult(intentId: string): Promise<unknown> {
-    return this.fetchJson(`/intents/${intentId}/result`);
+    return this.fetchJson(`/intents/${encodeURIComponent(intentId)}/result`);
+  }
+
+  async stopIntent(intentId: string): Promise<unknown> {
+    return this.fetchJson(`/intents/${encodeURIComponent(intentId)}/stop`, { method: 'POST' });
   }
 
   // GET /intents/:id/events (SSE) -> AgentEvent stream (http.rs:1007, sse.rs:51)

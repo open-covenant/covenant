@@ -39,6 +39,8 @@ pub enum AuditError {
     Serde(#[from] serde_json::Error),
     #[error("chain corruption: events file has {events} rows, chain file has {chain}; refusing to rebuild — events > chain is the recoverable shape, rerun purge_older_than with the same cutoff to truncate the orphan events; events < chain means the chain was tampered or restored from a stale backup, rebuild from a trusted backup")]
     ChainCorruption { events: usize, chain: usize },
+    #[error("legacy capability checks are read-only historical records")]
+    LegacyReadOnly,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -828,6 +830,17 @@ pub enum AuditKind {
         max_uses: u64,
         used: u64,
     },
+    /// Read compatibility for the old on-disk `capability_check` shape that
+    /// did not record `authorized_by`. Attribution is unknown: `passed` is
+    /// only the historical check result, never evidence of an approver or
+    /// signed rule. Current writers continue to emit [`Self::CapabilityCheck`].
+    /// This distinct discriminator makes the limitation visible in API reads.
+    LegacyCapabilityCheck {
+        agent_id: String,
+        required_actions: Vec<String>,
+        missing_actions: Vec<String>,
+        passed: bool,
+    },
 }
 
 #[async_trait]
@@ -1023,12 +1036,59 @@ fn build_chain_entries(events: &[AuditEvent]) -> Result<Vec<AuditChainEntry>, Au
     Ok(entries)
 }
 
+/// Decode a persisted row from before capability checks recorded their grants.
+/// The current wire schema remains strict: only the disk reader accepts the
+/// exact old shape, and exposes it as explicitly unknown legacy attribution.
+/// Never rewrite the source line: its original bytes are the chain evidence.
+fn parse_stored_event(line: &str) -> Result<AuditEvent, serde_json::Error> {
+    #[derive(Deserialize)]
+    struct LegacyEvent {
+        id: Uuid,
+        timestamp_ms: u64,
+        issuer: AgentId,
+        kind: LegacyKind,
+    }
+    #[derive(Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+    enum LegacyKind {
+        CapabilityCheck {
+            agent_id: String,
+            required_actions: Vec<String>,
+            missing_actions: Vec<String>,
+            passed: bool,
+        },
+    }
+    match serde_json::from_str(line) {
+        Ok(event) => Ok(event),
+        Err(original) => {
+            let legacy: LegacyEvent = serde_json::from_str(line).map_err(|_| original)?;
+            let LegacyKind::CapabilityCheck {
+                agent_id,
+                required_actions,
+                missing_actions,
+                passed,
+            } = legacy.kind;
+            Ok(AuditEvent {
+                id: legacy.id,
+                timestamp_ms: legacy.timestamp_ms,
+                issuer: legacy.issuer,
+                kind: AuditKind::LegacyCapabilityCheck {
+                    agent_id,
+                    required_actions,
+                    missing_actions,
+                    passed,
+                },
+            })
+        }
+    }
+}
+
 async fn read_events(path: &PathBuf) -> Result<Vec<AuditEvent>, AuditError> {
     match fs::read_to_string(path).await {
         Ok(s) => s
             .lines()
             .filter(|l| !l.is_empty())
-            .map(serde_json::from_str)
+            .map(parse_stored_event)
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
@@ -1121,6 +1181,9 @@ impl JsonlAuditLog {
 #[async_trait]
 impl AuditLog for JsonlAuditLog {
     async fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
+        if matches!(event.kind, AuditKind::LegacyCapabilityCheck { .. }) {
+            return Err(AuditError::LegacyReadOnly);
+        }
         let _g = self.lock.lock().await;
         let existing_events = read_events(&self.path).await?;
         let chain_path = self.chain_path();
@@ -1186,7 +1249,7 @@ impl AuditLog for JsonlAuditLog {
             if trimmed.is_empty() {
                 continue;
             }
-            all.push(serde_json::from_str(trimmed)?);
+            all.push(parse_stored_event(trimmed)?);
         }
         let start = all.len().saturating_sub(limit);
         Ok(all.split_off(start))
@@ -1215,20 +1278,36 @@ impl AuditLog for JsonlAuditLog {
         // restores from a trusted backup. The chain-first ordering keeps
         // the recoverable shape on every crash window.
         let _g = self.lock.lock().await;
-        let existing = read_events(&self.path).await?;
+        let lines = read_event_lines(&self.path).await?;
+        let existing = lines
+            .iter()
+            .map(|line| parse_stored_event(line))
+            .collect::<Result<Vec<_>, _>>()?;
         if existing.is_empty() {
             return Ok(0);
         }
-        let kept: Vec<AuditEvent> = existing
+        let kept: Vec<(&AuditEvent, &String)> = existing
             .iter()
-            .filter(|e| e.timestamp_ms >= before_ms)
-            .cloned()
+            .zip(&lines)
+            .filter(|(event, _)| event.timestamp_ms >= before_ms)
             .collect();
         let purged = (existing.len() - kept.len()) as u64;
         if purged == 0 {
             return Ok(0);
         }
-        let chain_entries = build_chain_entries(&kept)?;
+        // Retention reindexes the chain, but must not normalize or upgrade a
+        // retained event's content. In particular a legacy compatibility view
+        // must never be written back over the original historical record.
+        let mut previous = ZERO_CHAIN_HASH.to_string();
+        let chain_entries: Vec<_> = kept
+            .iter()
+            .enumerate()
+            .map(|(index, (event, line))| {
+                let entry = chain_entry_for_line(index, event, line, &previous);
+                previous = entry.chain_hash_hex.clone();
+                entry
+            })
+            .collect();
         write_chain_entries(&self.chain_path(), &chain_entries).await?;
         let tmp_path = self.path.with_extension("jsonl.tmp");
         let mut f = OpenOptions::new()
@@ -1237,8 +1316,7 @@ impl AuditLog for JsonlAuditLog {
             .truncate(true)
             .open(&tmp_path)
             .await?;
-        for e in &kept {
-            let line = serde_json::to_string(e)?;
+        for (_, line) in &kept {
             f.write_all(line.as_bytes()).await?;
             f.write_all(b"\n").await?;
         }
@@ -1264,7 +1342,7 @@ impl AuditLog for JsonlAuditLog {
         for (index, line) in event_lines.iter().enumerate() {
             let event_hash_hex = sha256_hex(line.as_bytes());
             let chain_hash_hex = chain_hash(&previous_hash_hex, &event_hash_hex);
-            match serde_json::from_str::<AuditEvent>(line) {
+            match parse_stored_event(line) {
                 Ok(event) => {
                     let expected = AuditChainEntry {
                         index: index as u64,
@@ -1353,6 +1431,9 @@ impl InMemoryAuditLog {
 #[async_trait]
 impl AuditLog for InMemoryAuditLog {
     async fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
+        if matches!(event.kind, AuditKind::LegacyCapabilityCheck { .. }) {
+            return Err(AuditError::LegacyReadOnly);
+        }
         self.events.lock().await.push(event);
         Ok(())
     }
@@ -1439,8 +1520,8 @@ pub struct PrivilegedAction {
     /// `Some` on rows that name an authorizing or affected capability.
     pub rule: Option<String>,
     /// How the action resolved: `authorized`, `denied`, `granted`,
-    /// `grant_rejected`, `revoked`, `revoke_noop`, `scope_rejected`, or
-    /// `revoke_rejected`.
+    /// `grant_rejected`, `revoked`, `revoke_noop`, `scope_rejected`,
+    /// `revoke_rejected`, or `unknown_legacy_authorization`.
     pub outcome: String,
 }
 
@@ -1498,6 +1579,28 @@ pub fn project_privileged_actions(event: &AuditEvent) -> Vec<PrivilegedAction> {
             }
             rows
         }
+        AuditKind::LegacyCapabilityCheck {
+            agent_id,
+            required_actions,
+            missing_actions,
+            ..
+        } => required_actions
+            .iter()
+            .map(|action| {
+                row(
+                    agent_id.clone(),
+                    action.clone(),
+                    None,
+                    None,
+                    if missing_actions.contains(action) {
+                        "denied"
+                    } else {
+                        "unknown_legacy_authorization"
+                    },
+                    "legacy_capability_check",
+                )
+            })
+            .collect(),
         AuditKind::CapabilityGranted {
             subject_display,
             action,
@@ -1632,6 +1735,160 @@ mod tests {
             result_hash_hex: hash_hex(b"some result"),
             status: status.into(),
         }
+    }
+
+    fn legacy_check_line() -> String {
+        let event = dummy(AuditKind::CapabilityCheck {
+            agent_id: "legacy@local".into(),
+            required_actions: vec!["memory.read".into(), "memory.write".into()],
+            missing_actions: vec!["memory.write".into()],
+            passed: false,
+            authorized_by: vec![],
+        });
+        let mut value = serde_json::to_value(event).unwrap();
+        value["kind"]
+            .as_object_mut()
+            .unwrap()
+            .remove("authorized_by");
+        // Deliberate noncanonical spacing makes any rewrite observable.
+        serde_json::to_string(&value).unwrap().replace(",", ", ")
+    }
+
+    async fn seed_raw_events(path: &PathBuf, lines: &[String]) {
+        let mut previous = ZERO_CHAIN_HASH.to_string();
+        let mut anchors = String::new();
+        for (index, line) in lines.iter().enumerate() {
+            let event = parse_stored_event(line).unwrap();
+            let anchor = chain_entry_for_line(index, &event, line, &previous);
+            previous = anchor.chain_hash_hex.clone();
+            anchors.push_str(&serde_json::to_string(&anchor).unwrap());
+            anchors.push('\n');
+        }
+        fs::write(path, format!("{}\n", lines.join("\n")))
+            .await
+            .unwrap();
+        fs::write(path.with_extension("chain.jsonl"), anchors)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_capability_check_append_preserves_bytes_chain_and_unknown_attribution() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let line = legacy_check_line();
+        assert!(serde_json::from_str::<AuditEvent>(&line).is_err());
+        seed_raw_events(&path, std::slice::from_ref(&line)).await;
+        let original_events = fs::read(&path).await.unwrap();
+        let original_chain = fs::read(path.with_extension("chain.jsonl")).await.unwrap();
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        let legacy = log.recent(10).await.unwrap().remove(0);
+        assert!(matches!(
+            legacy.kind,
+            AuditKind::LegacyCapabilityCheck { passed: false, .. }
+        ));
+        let projected = project_privileged_actions(&legacy);
+        assert_eq!(projected.len(), 2);
+        assert_eq!(projected[0].outcome, "unknown_legacy_authorization");
+        assert_eq!(projected[1].outcome, "denied");
+        assert!(projected
+            .iter()
+            .all(|row| row.approver.is_none() && row.rule.is_none()));
+        assert!(log.verify_integrity().await.unwrap().valid);
+        let fresh = dummy(AuditKind::AuthenticationFailed {
+            transport: "http".into(),
+            reason: "missing bearer token".into(),
+        });
+        log.record(fresh.clone()).await.unwrap();
+        drop(log);
+        let reopened = JsonlAuditLog::open(path.clone()).await.unwrap();
+        let report = reopened.verify_integrity().await.unwrap();
+        assert!(report.valid);
+        assert_eq!((report.events, report.anchors), (2, 2));
+        assert!(fs::read(&path).await.unwrap().starts_with(&original_events));
+        assert!(fs::read(path.with_extension("chain.jsonl"))
+            .await
+            .unwrap()
+            .starts_with(&original_chain));
+        assert_eq!(reopened.recent(1).await.unwrap(), vec![fresh]);
+        let proof = reopened.prove_inclusion(legacy.id).await.unwrap().unwrap();
+        assert_eq!(proof.leaf_line, line);
+        assert!(verify_inclusion_proof(&proof).valid);
+        assert_eq!(proof.root_hash_hex, report.root_hash_hex);
+        assert!(matches!(
+            reopened.record(legacy.clone()).await,
+            Err(AuditError::LegacyReadOnly)
+        ));
+        assert!(matches!(
+            InMemoryAuditLog::new().record(legacy).await,
+            Err(AuditError::LegacyReadOnly)
+        ));
+        assert_eq!(reopened.verify_integrity().await.unwrap(), report);
+    }
+
+    #[test]
+    fn legacy_capability_check_reader_does_not_relax_current_or_malformed_records() {
+        let line = legacy_check_line();
+        for field in ["agent_id", "required_actions", "missing_actions", "passed"] {
+            let mut value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            value["kind"].as_object_mut().unwrap().remove(field);
+            assert!(parse_stored_event(&serde_json::to_string(&value).unwrap()).is_err());
+        }
+        for invalid in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!([{"action":"memory.read"}]),
+        ] {
+            let mut value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            value["kind"]["authorized_by"] = invalid;
+            assert!(parse_stored_event(&serde_json::to_string(&value).unwrap()).is_err());
+        }
+        let mut extra: serde_json::Value = serde_json::from_str(&line).unwrap();
+        extra["kind"]["unknown_field"] = true.into();
+        assert!(parse_stored_event(&serde_json::to_string(&extra).unwrap()).is_err());
+        assert!(parse_stored_event(
+            &line.replace("\"passed\":false", "\"passed\":false,\"passed\":true")
+        )
+        .is_err());
+        let mut modern: serde_json::Value = serde_json::from_str(&line).unwrap();
+        modern["kind"]["authorized_by"] = serde_json::json!([]);
+        assert!(matches!(
+            parse_stored_event(&serde_json::to_string(&modern).unwrap())
+                .unwrap()
+                .kind,
+            AuditKind::CapabilityCheck { .. }
+        ));
+        let mut passed: serde_json::Value = serde_json::from_str(&line).unwrap();
+        passed["kind"]["passed"] = true.into();
+        passed["kind"]["missing_actions"] = serde_json::json!([]);
+        let legacy = parse_stored_event(&serde_json::to_string(&passed).unwrap()).unwrap();
+        assert!(project_privileged_actions(&legacy)
+            .iter()
+            .all(|row| row.outcome == "unknown_legacy_authorization"
+                && row.approver.is_none()
+                && row.rule.is_none()));
+    }
+
+    #[tokio::test]
+    async fn legacy_capability_check_retention_preserves_kept_raw_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let old = serde_json::to_string(&dummy(intent_kind("ok"))).unwrap();
+        let mut legacy: serde_json::Value = serde_json::from_str(&legacy_check_line()).unwrap();
+        legacy["timestamp_ms"] = 100.into();
+        let line = serde_json::to_string(&legacy).unwrap().replace(",", ", ");
+        seed_raw_events(&path, &[old, line.clone()]).await;
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        assert_eq!(log.purge_older_than(100).await.unwrap(), 1);
+        assert_eq!(
+            fs::read_to_string(&path).await.unwrap(),
+            format!("{line}\n")
+        );
+        assert!(log.verify_integrity().await.unwrap().valid);
+        let event_id = parse_stored_event(&line).unwrap().id;
+        let proof = log.prove_inclusion(event_id).await.unwrap().unwrap();
+        assert_eq!(proof.leaf_line, line);
+        assert!(verify_inclusion_proof(&proof).valid);
     }
 
     #[tokio::test]

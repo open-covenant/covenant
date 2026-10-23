@@ -2,6 +2,8 @@
 // The connector holds the LOCAL daemon bearer token and dials OUT to Hatcher,
 // so the daemon never listens on a public interface (see docs/hatcher-connector-design.md §2).
 
+import { artifactOrigin } from './artifacts.js';
+
 export interface Config {
   // Health/metrics server (local only — Render health check, not the Hatcher channel).
   port: number;
@@ -17,6 +19,10 @@ export interface Config {
   // Outbound Hatcher mesh channel. Stubbed transport in v0 (see transport.ts).
   hatcherUrl: string;
   hatcherToken: string;
+  hatcherReconnectBaseMs: number;
+  hatcherReconnectMaxMs: number;
+  agentId?: string;
+  gpuEnabled: boolean;
   // Single-use pairing code minted by the Hatcher UI during `covenant hatcher pair`.
   pairingCode?: string;
   // Optional path to a covenant.hatcher-agent.v0 manifest whose capabilities the
@@ -25,6 +31,8 @@ export interface Config {
   // Admission limits applied before any dispatch reaches the daemon.
   maxConcurrentDispatch: number;
   defaultDeadlineMs: number;
+  // Private coding-gateway origin whose GPU outputs /artifacts/:token/:name serves.
+  artifactOrigin?: string;
 }
 
 function required(name: string): string {
@@ -40,15 +48,21 @@ function optional(name: string): string | undefined {
 
 function int(name: string, fallback: number, { min = 1 }: { min?: number } = {}): number {
   const raw = process.env[name];
-  if (raw === undefined || raw === '') return fallback;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < min) throw new Error(`${name} must be an integer >= ${min}`);
+  const n = raw === undefined || raw === '' ? fallback : Number(raw);
+  if (!Number.isSafeInteger(n) || n < min) throw new Error(`${name} must be a safe integer >= ${min}`);
   return n;
 }
 
 export function loadConfig(): Config {
   const hatcherToken = required('HATCHER_CONNECTOR_TOKEN');
   if (hatcherToken.length < 24) throw new Error('HATCHER_CONNECTOR_TOKEN must be at least 24 chars');
+  const gpuFlag = optional('HATCHER_GPU_ENABLED') ?? 'false';
+  if (!['true', 'false', '1', '0'].includes(gpuFlag)) throw new Error('HATCHER_GPU_ENABLED must be true or false');
+  const gpuEnabled = gpuFlag === 'true' || gpuFlag === '1';
+  const agentId = optional('HATCHER_AGENT_ID');
+  if (gpuEnabled && !agentId) throw new Error('GPU enablement requires HATCHER_AGENT_ID');
+  const hatcherReconnectBaseMs = int('HATCHER_RECONNECT_BASE_MS', 30_000, { min: 30_000 });
+  const hatcherReconnectMaxMs = int('HATCHER_RECONNECT_MAX_MS', 300_000, { min: hatcherReconnectBaseMs });
 
   return {
     port: int('PORT', int('HATCHER_CONNECTOR_PORT', 8790)),
@@ -60,9 +74,14 @@ export function loadConfig(): Config {
     daemonRetries: int('COVENANT_DAEMON_RETRIES', 1, { min: 0 }),
     hatcherUrl: (process.env.HATCHER_MESH_URL ?? 'wss://mesh.hatcher.local/connector').replace(/\/+$/, ''),
     hatcherToken,
+    hatcherReconnectBaseMs,
+    hatcherReconnectMaxMs,
+    agentId,
+    gpuEnabled,
     pairingCode: optional('HATCHER_PAIRING_CODE'),
     manifestPath: optional('HATCHER_MANIFEST'),
     maxConcurrentDispatch: int('HATCHER_MAX_CONCURRENT_DISPATCH', 4),
     defaultDeadlineMs: int('HATCHER_DEFAULT_DEADLINE_MS', 1_800_000),
+    artifactOrigin: artifactOrigin(process.env.HATCHER_ARTIFACT_ORIGIN),
   };
 }

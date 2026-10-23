@@ -210,7 +210,11 @@ describe('E2B tariff readiness', () => {
 
     await expect(
       verifyE2bTariff({ reference, ...expected }, responseFetcher(raw, source), tariffNow),
-    ).resolves.toEqual({ validUntilMs: Date.parse(evidence.validUntil) });
+    ).resolves.toEqual({
+      validUntilMs: Date.parse(evidence.validUntil),
+      // 4 vCPU x $0.000014 + 4 GiB x $0.0000045: the list price, before the safety multiplier.
+      listUsdPerSec: expect.closeTo(0.000074, 12),
+    });
   });
 
   it('fails closed on an unfetched digest, resource drift, or an understated formula', async () => {

@@ -9,12 +9,22 @@
  *
  */
 
+import type { ComputeCleanupReport, ComputeConfig, ComputeSession } from './compute.js';
+import type { GpuRunner, GpuCommandOutcome } from './gpu-run.js';
+
+export interface GpuPolicy {
+  max_usdc_micros: 200000;
+  duration_secs: 300;
+  max_launches: 1;
+}
+
 // Hermes /v1 wire contract consumed by covenantd.
 
 export interface RunRequest {
   input: string;
   session_id: string;
   max_cost_usd: number;
+  gpu?: GpuPolicy;
   repository_url?: string;
   base_sha?: string;
   validation_commands?: string[];
@@ -41,6 +51,8 @@ export interface RunState {
   usage?: TokenUsage;
   costUsd?: number;
   providerReceipts?: ProviderReceipt[];
+  compute?: ComputeCleanupReport;
+  gpuCommands?: GpuCommandOutcome[];
 }
 
 /** GET /v1/capabilities: the three features the daemon gates on plus the
@@ -66,7 +78,7 @@ export type GatewayEvent =
   | { type: 'reasoning.available'; text: string }
   | { type: 'approval.request'; choices: string[] }
   | { type: 'run.completed'; output: string }
-  | { type: 'run.failed'; error: string };
+  | { type: 'run.failed'; error: string; output?: string };
 
 // Pluggable coding backend.
 // Anthropic and OpenAI adapters implement this; selected per run.
@@ -125,6 +137,11 @@ export interface CodingBackend {
     signal: AbortSignal; // aborts on wall-clock budget or POST /stop
     emit: (e: GatewayEvent) => void;
     maxProviderCostUsd: number;
+    /** Only constructed after an authenticated, explicit dispatch grant. */
+    computeSession?: ComputeSession;
+    computeConfig?: ComputeConfig;
+    /** Runs commands on a workspace the session launched; present with computeSession. */
+    gpuRunner?: GpuRunner;
     recordProviderRequest?: () => void | Promise<void>;
     recordProviderReceipt?: (receipt: ProviderReceipt) => void | Promise<void>;
     /**
@@ -157,6 +174,8 @@ export interface SandboxSpec {
 
 export interface Sandbox {
   readFile(path: string): Promise<string>;
+  /** Raw bytes, for copying non-text files to a GPU workspace. */
+  readBytes?(path: string): Promise<Uint8Array>;
   writeFile(path: string, content: string): Promise<void>;
   exec(cmd: string, opts?: { timeoutMs?: number }): Promise<ExecResult>;
   /** Public URL serving a port inside the sandbox. Used to preview a built

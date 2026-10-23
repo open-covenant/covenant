@@ -1,0 +1,16 @@
+{
+  "schema": "mizuki.e2b-tariff.v1",
+  "provider": "e2b",
+  "effectiveAt": "2026-10-18T23:09:58.133Z",
+  "validUntil": "2026-10-25T23:09:58.133Z",
+  "sourceUrl": "https://e2b.dev/pricing.md",
+  "sourceSha256": "cf3394181e03c26fe4012e3930ebd678bf64db2826bdf940b23c7d53b89923d8",
+  "templateId": "rki5dems9wqfm4r03t7g",
+  "cpuCount": 2,
+  "memoryMb": 512,
+  "cpuUsdPerCoreSecond": 0.000014,
+  "memoryUsdPerGibSecond": 0.0000045,
+  "fixedUsdPerSecond": 0,
+  "safetyMultiplier": 2,
+  "worstCaseUsdPerSecond": 0.0002
+}

@@ -1183,6 +1183,7 @@ struct IntentOutcome {
     /// Workspace files captured from the run (for the UI file tree / preview).
     /// Set via `set_files` during dispatch; `complete` leaves them untouched.
     files: Vec<covenant_runtime::BuildFile>,
+    issuer_pubkey: Option<[u8; 32]>,
 }
 
 #[derive(Default)]
@@ -1246,6 +1247,7 @@ impl OutcomeStore {
                 result_hash_hex: None,
                 updated_ms: epoch_ms(),
                 files: Vec::new(),
+                issuer_pubkey: None,
             },
         );
         self.order.push_back(id);
@@ -1485,6 +1487,55 @@ impl Server {
             "updated_ms": o.updated_ms,
             "files": o.files,
         }))
+    }
+
+    /// Stop is bound to the authenticated issuer, including a request racing
+    /// the spawned runner's first gateway call. Acknowledgement is not a receipt.
+    pub async fn stop_intent(
+        &self,
+        id: Uuid,
+        peer: &AgentId,
+    ) -> Result<serde_json::Value, &'static str> {
+        {
+            let store = self
+                .intent_outcomes
+                .lock()
+                .map_err(|_| "intent state unavailable")?;
+            let outcome = store.map.get(&id).ok_or("unknown intent")?;
+            if outcome.issuer_pubkey != Some(peer.pubkey) {
+                return Err("intent belongs to another peer");
+            }
+            if outcome.status != "running" && outcome.status != "stopping" {
+                return Ok(serde_json::json!({ "intent_id": id, "status": outcome.status }));
+            }
+        }
+        self.runner
+            .cancel_intent(id)
+            .await
+            .map_err(|_| "stop could not be confirmed; cleanup remains pending")?;
+        let mut store = self
+            .intent_outcomes
+            .lock()
+            .map_err(|_| "intent state unavailable")?;
+        if let Some(outcome) = store.map.get_mut(&id) {
+            // Completion may have won the race while the stop call was in flight.
+            if outcome.status == "running" || outcome.status == "stopping" {
+                outcome.status = "stopping".into();
+                outcome.updated_ms = epoch_ms();
+            }
+            return Ok(serde_json::json!({ "intent_id": id, "status": outcome.status }));
+        }
+        Err("unknown intent")
+    }
+
+    pub async fn submit_execution_intent(
+        &self,
+        text: String,
+        peer: &AgentId,
+        execution: covenant_runtime::ExecutionOptions,
+    ) -> Response {
+        self.dispatch_intent_with_options(Uuid::new_v4(), text, peer, true, Some(execution))
+            .await
     }
 
     /// Returns a clone of the shared in-flight stream tracker. Tests
@@ -5529,6 +5580,52 @@ impl Server {
         peer: &AgentId,
         allow_async: bool,
     ) -> Response {
+        self.dispatch_intent_with_options(intent_id, text, peer, allow_async, None)
+            .await
+    }
+
+    async fn dispatch_intent_with_options(
+        &self,
+        intent_id: Uuid,
+        text: String,
+        peer: &AgentId,
+        allow_async: bool,
+        execution: Option<covenant_runtime::ExecutionOptions>,
+    ) -> Response {
+        if let Some(options) = &execution {
+            if let Err(message) = options.validate() {
+                return Response::Error {
+                    message: message.into(),
+                };
+            }
+            let is_hermes = self
+                .router
+                .route(&text)
+                .and_then(|m| self.router.find_by_id(&m.agent_id))
+                .is_some_and(|card| {
+                    card.manifest.agent.runtime == covenant_manifest::Runtime::Hermes
+                });
+            if !is_hermes {
+                return Response::Error {
+                    message: "explicit execution options require a matching Hermes coding agent"
+                        .into(),
+                };
+            }
+            if options.gpu.is_some() {
+                let permission = self
+                    .check_capabilities(
+                        "gpu_workspace".into(),
+                        vec!["compute.gpu_workspace".into()],
+                        peer,
+                    )
+                    .await;
+                if !permission.passed {
+                    return Response::Error {
+                        message: "GPU execution requires capability compute.gpu_workspace".into(),
+                    };
+                }
+            }
+        }
         if allow_async {
             let hermes_agent = self
                 .router
@@ -5539,11 +5636,21 @@ impl Server {
             if let Some(agent_id) = hermes_agent {
                 if let Ok(mut store) = self.intent_outcomes.lock() {
                     store.insert_running(intent_id, &text, Some(agent_id));
+                    if let Some(outcome) = store.map.get_mut(&intent_id) {
+                        outcome.issuer_pubkey = Some(peer.pubkey);
+                    }
                 }
                 let me = self.clone();
                 let peer = peer.clone();
                 tokio::spawn(async move {
-                    let resp = me.dispatch_intent_run(intent_id, text, &peer).await;
+                    let resp = me
+                        .dispatch_intent_run_with_options(
+                            intent_id,
+                            text,
+                            &peer,
+                            execution.as_ref(),
+                        )
+                        .await;
                     if let Ok(mut store) = me.intent_outcomes.lock() {
                         store.complete(intent_id, &resp);
                     }
@@ -5557,10 +5664,17 @@ impl Server {
                 };
             }
         }
-        self.dispatch_intent_run(intent_id, text, peer).await
+        self.dispatch_intent_run_with_options(intent_id, text, peer, execution.as_ref())
+            .await
     }
 
-    async fn dispatch_intent_run(&self, intent_id: Uuid, text: String, peer: &AgentId) -> Response {
+    async fn dispatch_intent_run_with_options(
+        &self,
+        intent_id: Uuid,
+        text: String,
+        peer: &AgentId,
+        execution: Option<&covenant_runtime::ExecutionOptions>,
+    ) -> Response {
         // Pre-allocated so the budget debit's `paired_receipt` and the
         // settlement receipt's `id` agree — joining the budget log to
         // the receipt log on this UUID matches 1:1 instead of producing
@@ -5664,7 +5778,12 @@ impl Server {
                 .cloned()
                 .collect::<Vec<_>>();
             let check = self
-                .check_capabilities(card.id.clone(), required, peer)
+                .check_capabilities_for_execution(
+                    card.id.clone(),
+                    required,
+                    peer,
+                    execution.map(|options| options.run_key.as_str()),
+                )
                 .await;
             if !check.passed {
                 return Response::Error {
@@ -5788,7 +5907,7 @@ impl Server {
                 priority: Priority::Normal,
                 parent: None,
             };
-            let run_result = self.runner.run(card, &intent).await;
+            let run_result = self.runner.run_with_options(card, &intent, execution).await;
             self.clear_active_budget_checkpoint(intent_id).await;
             match run_result {
                 Ok(result) => {
@@ -5801,6 +5920,37 @@ impl Server {
                         }
                     }
                     (result.text, result.sources, result.runtime_events)
+                }
+                Err(covenant_runtime::RunnerError::RunCancelled) => {
+                    return Response::IntentResult {
+                        intent_id,
+                        status: "cancelled".into(),
+                        text: "run cancelled".into(),
+                        sources: Vec::new(),
+                        settlement: None,
+                    };
+                }
+                Err(covenant_runtime::RunnerError::RunCancelledWithOutput { output }) => {
+                    return Response::IntentResult {
+                        intent_id,
+                        status: "cancelled".into(),
+                        text: output,
+                        sources: Vec::new(),
+                        settlement: None,
+                    };
+                }
+                Err(covenant_runtime::RunnerError::RunFailedWithOutput { message, output }) => {
+                    warn!(agent = %card.id, error = %message, "agent run failed");
+                    // Cleanup can settle successfully while the workload fails.
+                    // Return its evidence through the normal result body, keeping
+                    // the failure status and without inventing a daemon receipt.
+                    return Response::IntentResult {
+                        intent_id,
+                        status: "failed".into(),
+                        text: format!("{message}\n\n{output}"),
+                        sources: Vec::new(),
+                        settlement: None,
+                    };
                 }
                 Err(e) => {
                     warn!(agent = %card.id, error = %e, "agent run failed");
@@ -6003,8 +6153,20 @@ impl Server {
         required: Vec<String>,
         peer: &AgentId,
     ) -> CapabilityCheckOutcome {
+        self.check_capabilities_for_execution(scope_id, required, peer, None)
+            .await
+    }
+
+    async fn check_capabilities_for_execution(
+        &self,
+        scope_id: String,
+        required: Vec<String>,
+        peer: &AgentId,
+        run_key: Option<&str>,
+    ) -> CapabilityCheckOutcome {
         let groups = required.into_iter().map(|a| vec![a]).collect();
-        self.check_capabilities_any_of(scope_id, groups, peer).await
+        self.check_capabilities_any_of_for_execution(scope_id, groups, peer, run_key)
+            .await
     }
 
     /// Capability check where each requirement is satisfied by **any**
@@ -6024,6 +6186,22 @@ impl Server {
         alternatives_per_required: Vec<Vec<String>>,
         peer: &AgentId,
     ) -> CapabilityCheckOutcome {
+        self.check_capabilities_any_of_for_execution(
+            scope_id,
+            alternatives_per_required,
+            peer,
+            None,
+        )
+        .await
+    }
+
+    async fn check_capabilities_any_of_for_execution(
+        &self,
+        scope_id: String,
+        alternatives_per_required: Vec<Vec<String>>,
+        peer: &AgentId,
+        run_key: Option<&str>,
+    ) -> CapabilityCheckOutcome {
         let now = epoch_ms();
         if alternatives_per_required.is_empty() {
             return CapabilityCheckOutcome {
@@ -6041,6 +6219,14 @@ impl Server {
         let valid_caps: Vec<_> = user_caps
             .iter()
             .filter(|c| verify_with_clock_and_trust_root(c, now, trust_root).is_ok())
+            // A per-dispatch coding grant is usable only by that exact typed
+            // execution. Legacy/untyped requests must not inherit it, and a
+            // malformed run_key scope fails closed rather than becoming broad.
+            .filter(|c| match c.capability.scope.get("run_key") {
+                None => true,
+                Some(serde_json::Value::String(key)) => Some(key.as_str()) == run_key,
+                Some(_) => false,
+            })
             .collect();
         let mut required: Vec<String> = Vec::with_capacity(alternatives_per_required.len());
         let mut missing: Vec<String> = Vec::new();
@@ -17236,6 +17422,205 @@ fn agent_id_for_card_id(card_id: &str) -> AgentId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn connector_gpu_grant_shapes_mint_and_authorize_real_peer() {
+        let server = server_with(vec![], "");
+        let peer = AgentId::new("hatcher-connector-test", [7; 32]);
+        let expires_at = epoch_ms() + 600_000;
+        let gpu_scope = serde_json::json!({
+            "max_usdc_micros": 200000, "duration_secs": 300, "max_launches": 1
+        });
+        let native_scope = serde_json::json!({ "version": 1, "run_key": "authorized-dispatch" });
+        for (action, scope) in [
+            ("memory.write", None),
+            ("compute.gpu_workspace", Some(gpu_scope.clone())),
+            ("intent.subscribe", Some(native_scope.clone())),
+            ("tool.code", Some(native_scope)),
+        ] {
+            let response = server
+                .respond(
+                    Request::GrantCapability {
+                        action: action.into(),
+                        scope,
+                        expires_at: Some(expires_at),
+                    },
+                    &peer,
+                )
+                .await;
+            assert!(
+                matches!(response, Response::CapabilityGranted { .. }),
+                "mint {action} failed: {response:?}"
+            );
+        }
+        let signed = server
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .unwrap();
+        assert_eq!(signed.len(), 4);
+        for grant in &signed {
+            assert_eq!(grant.capability.expires_at, Some(expires_at));
+            assert!(verify_with_clock_and_trust_root(
+                grant,
+                epoch_ms(),
+                server.identity.agent_id().pubkey
+            )
+            .is_ok());
+        }
+        assert_eq!(
+            signed
+                .iter()
+                .find(|grant| grant.capability.action == "compute.gpu_workspace")
+                .unwrap()
+                .capability
+                .scope,
+            gpu_scope
+        );
+        assert!(
+            server
+                .check_capabilities(
+                    "gpu_workspace".into(),
+                    vec!["compute.gpu_workspace".into()],
+                    &peer
+                )
+                .await
+                .passed
+        );
+        assert!(
+            server
+                .check_capabilities_for_execution(
+                    "coder".into(),
+                    vec!["intent.subscribe".into(), "tool.code".into()],
+                    &peer,
+                    Some("authorized-dispatch")
+                )
+                .await
+                .passed
+        );
+    }
+
+    #[tokio::test]
+    async fn native_coding_grants_bind_to_exact_execution_run_key() {
+        let server = server_with(vec![], "");
+        let peer = server.identity.agent_id();
+        for action in ["intent.subscribe", "tool.code"] {
+            grant_scoped_action(
+                &server,
+                action,
+                serde_json::json!({ "version": 1, "run_key": "authorized-dispatch" }),
+            )
+            .await;
+        }
+        let required = || vec!["intent.subscribe".into(), "tool.code".into()];
+        assert!(
+            server
+                .check_capabilities_for_execution(
+                    "coder".into(),
+                    required(),
+                    &peer,
+                    Some("authorized-dispatch")
+                )
+                .await
+                .passed
+        );
+        assert!(
+            !server
+                .check_capabilities_for_execution(
+                    "coder".into(),
+                    required(),
+                    &peer,
+                    Some("another-dispatch")
+                )
+                .await
+                .passed
+        );
+        assert!(
+            !server
+                .check_capabilities("coder".into(), required(), &peer)
+                .await
+                .passed
+        );
+
+        // Existing unrestricted authorization remains usable by legacy callers.
+        for action in ["intent.subscribe", "tool.code"] {
+            grant_action(&server, action).await;
+        }
+        assert!(
+            server
+                .check_capabilities("coder".into(), required(), &peer)
+                .await
+                .passed
+        );
+
+        let malformed = server_with(vec![], "");
+        grant_scoped_action(
+            &malformed,
+            "tool.code",
+            serde_json::json!({ "version": 1, "run_key": null }),
+        )
+        .await;
+        assert!(
+            !malformed
+                .check_capabilities_for_execution(
+                    "coder".into(),
+                    vec!["tool.code".into()],
+                    &malformed.identity.agent_id(),
+                    Some("authorized-dispatch")
+                )
+                .await
+                .passed
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_intent_is_issuer_bound_and_does_not_claim_settlement() {
+        struct StopRunner(std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl Runner for StopRunner {
+            async fn run(
+                &self,
+                _card: &AgentCard,
+                _intent: &Intent,
+            ) -> Result<covenant_runtime::AgentResult, covenant_runtime::RunnerError> {
+                unreachable!("stop test never dispatches a paid run")
+            }
+            async fn cancel_intent(&self, _id: Uuid) -> Result<(), covenant_runtime::RunnerError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        let runner = Arc::new(StopRunner(std::sync::atomic::AtomicUsize::new(0)));
+        let server = server_with_runner(vec![], runner.clone());
+        let id = Uuid::new_v4();
+        let owner = AgentId::new("owner", [1; 32]);
+        let other = AgentId::new("other", [2; 32]);
+        {
+            let mut store = server.intent_outcomes.lock().unwrap();
+            store.insert_running(id, "GPU smoke", Some("coder".into()));
+            store.map.get_mut(&id).unwrap().issuer_pubkey = Some(owner.pubkey);
+        }
+        assert_eq!(
+            server.stop_intent(id, &other).await.unwrap_err(),
+            "intent belongs to another peer"
+        );
+        assert_eq!(runner.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            server.stop_intent(id, &owner).await.unwrap()["status"],
+            "stopping"
+        );
+        assert_eq!(server.intent_outcome(&id).unwrap()["status"], "stopping");
+        assert_eq!(runner.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        {
+            let mut store = server.intent_outcomes.lock().unwrap();
+            store.map.get_mut(&id).unwrap().status = "cancelled".into();
+        }
+        assert_eq!(
+            server.stop_intent(id, &owner).await.unwrap()["status"],
+            "cancelled"
+        );
+        assert_eq!(runner.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
     use covenant_ipc::StreamEnvelope;
     use covenant_manifest::Manifest;
     use covenant_memory::{InMemoryStore, MEMORY_BACKFILL_SAVEPOINT_NAME};
@@ -19371,6 +19756,88 @@ required = {caps:?}
                 AuditKind::IntentDispatched { intent_id: i, .. } if *i == intent_id
             )),
             "async run must still write an IntentDispatched row for the intent",
+        );
+    }
+
+    #[tokio::test]
+    async fn hermes_failed_intent_retains_final_receipts_without_success_settlement() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let gateway = MockServer::start().await;
+        let output = "[gpu_workspace final receipts: [{\"job_id\":\"original-job\",\"receipt\":{\"charged_usdc_micros\":123,\"refunded_usdc_micros\":199877}}]]\n[run accounting: {\"total_usd\":0.12}]";
+        Mock::given(method("POST"))
+            .and(path("/runs"))
+            .and(header("authorization", "Bearer test-gateway-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "run_id": "failed-gpu-run"
+            })))
+            .expect(1)
+            .mount(&gateway)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/runs/failed-gpu-run"))
+            .and(header("authorization", "Bearer test-gateway-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "failed", "error": "GPU command timed out", "output": output
+            })))
+            .expect(1)
+            .mount(&gateway)
+            .await;
+        let server = server_with_runner(
+            vec![hermes_stub_card("coder", vec!["tool.code"])],
+            Arc::new(
+                covenant_runtime::HermesRunner::new(gateway.uri(), Some("test-gateway-key".into()))
+                    .unwrap(),
+            ),
+        );
+        grant_action(&server, "tool.code").await;
+        grant_action(&server, "memory.write").await;
+        let intent_id = match server
+            .op_respond(Request::SubmitIntent {
+                text: "create embeddings.py and run it".into(),
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::IntentResult {
+                intent_id, status, ..
+            } => {
+                assert_eq!(status, "running");
+                intent_id
+            }
+            other => panic!("expected async intent, got {other:?}"),
+        };
+        let outcome = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let outcome = server.intent_outcome(&intent_id).unwrap();
+                if outcome["status"] != "running" {
+                    break outcome;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("failed outcome must become available");
+        let final_text = format!("GPU command timed out\n\n{output}");
+        assert_eq!(outcome["status"], "failed");
+        assert_eq!(outcome["text"], final_text);
+        assert_eq!(outcome["result_hash_hex"], hash_hex(final_text.as_bytes()));
+        assert!(server.settlement.recent(10).await.unwrap().is_empty());
+        assert!(server
+            .audit
+            .recent(50)
+            .await
+            .unwrap()
+            .iter()
+            .all(|event| !matches!(event.kind, AuditKind::IntentDispatched { .. })));
+        assert_eq!(
+            server
+                .stop_intent(intent_id, &server.identity.agent_id())
+                .await
+                .unwrap()["status"],
+            "failed",
+            "a later stop must not overwrite the terminal workload failure"
         );
     }
 

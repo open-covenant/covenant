@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const ENV_KEYS = [
+  'CODER_ALLOWED_RUN_KEY',
+  'CODER_AUTH_TOKEN',
+  'RUN_STORE_PATH',
+  'LEDGER_PATH',
   'CODER_BACKEND',
   'CODER_MODEL',
   'CODER_IP_MAX_PER_IP',
@@ -45,6 +49,47 @@ describe('config env validation', () => {
     const { config } = await import('../src/config.js');
     return config;
   }
+
+  it('leaves the run-key pin disabled only when it is unset', async () => {
+    delete process.env.CODER_ALLOWED_RUN_KEY;
+    expect((await loadConfig()).allowedRunKey).toBeUndefined();
+  });
+
+  it.each([
+    '',
+    ' ',
+    'a'.repeat(63),
+    'a'.repeat(65),
+    'A'.repeat(64),
+    'g'.repeat(64),
+    ` ${'a'.repeat(64)}`,
+    `${'a'.repeat(64)}\n`,
+  ])('fails closed for malformed configured run key %j', async (key) => {
+    process.env.CODER_ALLOWED_RUN_KEY = key;
+    await expect(loadConfig()).rejects.toThrow(/CODER_ALLOWED_RUN_KEY/);
+  });
+
+  it('requires authentication and durable paths for a pinned run in every environment', async () => {
+    process.env.CODER_ALLOWED_RUN_KEY = 'a'.repeat(64);
+    process.env.CODER_AUTH_TOKEN = 't'.repeat(32);
+    process.env.RUN_STORE_PATH = '/data/runs.json';
+    process.env.LEDGER_PATH = '/data/ledger.json';
+    expect((await loadConfig()).allowedRunKey).toBe('a'.repeat(64));
+    for (const name of ['CODER_AUTH_TOKEN', 'RUN_STORE_PATH', 'LEDGER_PATH'] as const) {
+      const value = process.env[name];
+      delete process.env[name];
+      await expect(loadConfig()).rejects.toThrow(name);
+      process.env[name] = value;
+    }
+    process.env.CODER_AUTH_TOKEN = 'short';
+    await expect(loadConfig()).rejects.toThrow(/CODER_AUTH_TOKEN/);
+    process.env.CODER_AUTH_TOKEN = 't'.repeat(32);
+    process.env.RUN_STORE_PATH = 'relative/runs.json';
+    await expect(loadConfig()).rejects.toThrow(/absolute RUN_STORE_PATH/);
+    process.env.RUN_STORE_PATH = '/data/runs.json';
+    process.env.LEDGER_PATH = 'relative/ledger.json';
+    await expect(loadConfig()).rejects.toThrow(/absolute LEDGER_PATH/);
+  });
 
   it('accepts an explicit zero opt-out', async () => {
     process.env['CODER_IP_MAX_PER_IP'] = '0';

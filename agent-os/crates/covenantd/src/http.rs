@@ -166,6 +166,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/peers/revoke", post(peers_revoke))
         .route("/intents/resume", post(intents_resume))
         .route("/intents/:id/result", get(intent_result))
+        .route("/intents/:id/stop", post(stop_intent))
         .route("/intents/:id/events", get(intent_events))
         .route("/budget/debits", get(budget_debits))
         .route("/chain/status", get(chain_status))
@@ -377,6 +378,8 @@ async fn sap_stats() -> impl IntoResponse {
 #[derive(Deserialize)]
 struct SubmitIntentBody {
     text: String,
+    #[serde(default)]
+    execution: Option<covenant_runtime::ExecutionOptions>,
 }
 
 /// Dual-mode `POST /intent` handler per ADR 0010 slice 6.j.
@@ -405,6 +408,21 @@ async fn submit_intent(
     headers: HeaderMap,
     Json(b): Json<SubmitIntentBody>,
 ) -> Result<AxumResponse, ApiError> {
+    if let Some(execution) = b.execution {
+        if let Err(message) = execution.validate() {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "kind": "error", "message": message })),
+            )
+                .into_response());
+        }
+        return Ok(Json(
+            s.server
+                .submit_execution_intent(b.text, &peer, execution)
+                .await,
+        )
+        .into_response());
+    }
     let accept = headers
         .get(axum::http::header::ACCEPT)
         .and_then(|v| v.to_str().ok());
@@ -1196,6 +1214,28 @@ async fn intent_result(
     }
 }
 
+async fn stop_intent(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Path(id): Path<uuid::Uuid>,
+) -> AxumResponse {
+    match s.server.stop_intent(id, &peer).await {
+        Ok(result) => Json(result).into_response(),
+        Err(message) => {
+            let status = match message {
+                "unknown intent" => StatusCode::NOT_FOUND,
+                "intent belongs to another peer" => StatusCode::FORBIDDEN,
+                _ => StatusCode::BAD_GATEWAY,
+            };
+            (
+                status,
+                Json(serde_json::json!({ "kind": "error", "message": message })),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// SSE keep-alive cadence. Render and Cloudflare both close idle HTTP/1.1
 /// streams around the 100s mark; emitting a comment frame well under that
 /// window keeps the EventSource alive between tool calls so the watch-it-
@@ -1669,6 +1709,25 @@ impl From<anyhow::Error> for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn submit_intent_keeps_legacy_body_and_parses_strict_gpu_authorization() {
+        let legacy: SubmitIntentBody =
+            serde_json::from_value(serde_json::json!({ "text": "build" })).unwrap();
+        assert!(legacy.execution.is_none());
+        let request: SubmitIntentBody = serde_json::from_value(serde_json::json!({
+            "text": "build a GPU smoke test",
+            "execution": {
+                "run_key": "hatcher:dispatch-1", "max_cost_usd": 1,
+                "gpu": { "max_usdc_micros": 200000, "duration_secs": 300, "max_launches": 1 }
+            }
+        }))
+        .unwrap();
+        assert!(request.execution.unwrap().validate().is_ok());
+        assert!(serde_json::from_value::<SubmitIntentBody>(serde_json::json!({
+            "text": "build", "execution": { "run_key": "x", "max_cost_usd": 1, "gpu": {}, "bypass": true }
+        })).is_err());
+    }
 
     #[test]
     fn agent_event_sse_frame_pins_public_taxonomy_wire_form_and_intent_filter() {

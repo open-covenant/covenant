@@ -240,6 +240,11 @@
       "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000030\",\"timestamp_ms\":1700000000048,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"escrow_released\",\"decision_id\":\"5e111ed0-0000-0000-0000-000000000002\",\"receipt_id\":\"5e111ed0-0000-0000-0000-000000000007\",\"escrow_id\":\"escrow-001\",\"hirer_address\":\"Hirer111111111111111111111111111111111111\",\"worker_address\":\"Worker11111111111111111111111111111111111\",\"amount\":\"10.00\",\"asset\":\"USDC\",\"network\":\"solana\",\"provider\":\"orbserv\",\"tx_sig\":\"2Zq7Xs9wV3kLp8mNc1bR4tYd6uHf\"}}",
       "event_hash_hex": "2a2ad42b689bcf77d99713d8bca642ac58e7b4269afb203df117ee33adbe2614",
       "name": "escrow_released"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000031\",\"timestamp_ms\":1700000000049,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"legacy_capability_check\",\"agent_id\":\"agent@local\",\"required_actions\":[\"memory.read\"],\"missing_actions\":[],\"passed\":true}}",
+      "event_hash_hex": "2e46e1fe838f0a98c11d5a202b78504fdc798d4aa735d80612c49b32747778aa",
+      "name": "legacy_capability_check"
     }
   ]
 }

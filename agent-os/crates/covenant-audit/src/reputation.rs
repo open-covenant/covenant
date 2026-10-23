@@ -121,6 +121,7 @@ fn classify(kind: &AuditKind) -> Signal {
         | HermesApprovalRequested { .. }
         | HermesApprovalResolved { .. }
         | CapabilityCheck { .. }
+        | LegacyCapabilityCheck { .. }
         | IntentIgnored { .. }
         | A2ARepairApplied { .. }
         | A2AAutoRetrySchedulerScan { .. }

@@ -19,6 +19,18 @@ import type {
   TokenUsage,
   ValidationResult,
 } from './types.js';
+import type { GpuPolicy } from './types.js';
+import type { ComputeCleanupReport } from './compute.js';
+import { parseGpuPolicy } from './gpu-policy.js';
+import { validAccountingBasis, type RunAccountingBasis } from './run-accounting.js';
+import {
+  isGpuOutput,
+  type GpuOutput,
+  isGpuCommandOutcome,
+  MAX_GPU_COMMANDS,
+  type GpuCommandOutcome,
+} from './gpu-run.js';
+import { MAX_OUTPUT_FILES } from './workspace-exec.js';
 
 export interface StoredRun {
   id: string;
@@ -38,6 +50,13 @@ export interface StoredRun {
   costUsd?: number;
   providerRequestCount?: number;
   providerReceipts?: ProviderReceipt[];
+  gpu?: GpuPolicy;
+  compute?: ComputeCleanupReport;
+  desiredStatus?: 'completed' | 'failed' | 'cancelled';
+  nonComputeUsd?: number;
+  accountingBasis?: RunAccountingBasis;
+  gpuOutputs?: GpuOutput[];
+  gpuCommands?: GpuCommandOutcome[];
   updatedAt: string;
 }
 
@@ -51,7 +70,10 @@ export class RunStore {
   private readonly runs = new Map<string, StoredRun>();
   private persistenceError?: string;
 
-  constructor(private readonly path = process.env.RUN_STORE_PATH?.trim() || undefined) {
+  constructor(
+    private readonly path = process.env.RUN_STORE_PATH?.trim() || undefined,
+    private readonly pinnedSessionId?: string,
+  ) {
     this.load();
   }
 
@@ -65,6 +87,11 @@ export class RunStore {
 
   list(): StoredRun[] {
     return [...this.runs.values()].map(clone);
+  }
+
+  findSession(sessionId: string): StoredRun | undefined {
+    const run = [...this.runs.values()].find((candidate) => candidate.sessionId === sessionId);
+    return run ? clone(run) : undefined;
   }
 
   replay(sessionId: string, requestFingerprint: string): StoredRun | undefined {
@@ -131,10 +158,11 @@ export class RunStore {
         throw new Error('run store contains duplicate idempotency keys');
       }
       if (!TERMINAL.has(run.status)) {
-        run.status = 'failed';
+        run.status = run.gpu ? 'stopping' : 'failed';
+        if (run.gpu) run.desiredStatus = 'failed';
         run.error = 'gateway restarted before the run completed';
         run.costUsd = run.reservedMax;
-        run.events.push({ type: 'run.failed', error: run.error });
+        if (!run.gpu) run.events.push({ type: 'run.failed', error: run.error });
         run.updatedAt = new Date().toISOString();
         recovered = true;
       }
@@ -156,7 +184,18 @@ export class RunStore {
     }
     let pruned = false;
     while (ordered.length > MAX_RUNS || bytes > MAX_STORE_BYTES) {
-      const stale = ordered.pop();
+      let index = ordered.length - 1;
+      // The pinned session is the durable one-run admission record, including
+      // when its original request had no GPU policy. Never prune it to reopen spend.
+      while (
+        index >= 0 &&
+        (!TERMINAL.has(ordered[index]!.status) ||
+          ordered[index]!.gpu ||
+          (this.pinnedSessionId !== undefined &&
+            ordered[index]!.sessionId === this.pinnedSessionId))
+      )
+        index--;
+      const stale = index < 0 ? undefined : ordered.splice(index, 1)[0];
       if (!stale) throw new Error('run store cannot satisfy its persistence limit');
       this.runs.delete(stale.id);
       bytes -= sizes.get(stale.id) ?? 0;
@@ -203,6 +242,42 @@ export class RunStore {
 function isStoredRun(value: unknown): value is StoredRun {
   if (!value || typeof value !== 'object') return false;
   const run = value as Partial<StoredRun>;
+  try {
+    parseGpuPolicy(run.gpu);
+  } catch {
+    return false;
+  }
+  if (run.gpu && !run.sessionId) return false;
+  if (
+    run.desiredStatus !== undefined &&
+    !['completed', 'failed', 'cancelled'].includes(run.desiredStatus)
+  )
+    return false;
+  if (
+    run.nonComputeUsd !== undefined &&
+    (!Number.isFinite(run.nonComputeUsd) || run.nonComputeUsd < 0)
+  )
+    return false;
+  if (run.compute !== undefined && (!run.gpu || !validCleanupReport(run.compute, run.sessionId!)))
+    return false;
+  if (run.accountingBasis !== undefined && !validAccountingBasis(run.accountingBasis)) return false;
+  if (
+    run.gpuCommands !== undefined &&
+    (!run.gpu ||
+      !Array.isArray(run.gpuCommands) ||
+      run.gpuCommands.length > MAX_GPU_COMMANDS ||
+      !run.gpuCommands.every(isGpuCommandOutcome) ||
+      new Set(run.gpuCommands.map((command) => command.id)).size !== run.gpuCommands.length)
+  )
+    return false;
+  if (
+    run.gpuOutputs !== undefined &&
+    (!run.gpu ||
+      !Array.isArray(run.gpuOutputs) ||
+      run.gpuOutputs.length > MAX_OUTPUT_FILES ||
+      !run.gpuOutputs.every(isGpuOutput))
+  )
+    return false;
   const reservationValid =
     (run.reservationId === undefined && run.reservedMax === undefined) ||
     (typeof run.reservationId === 'string' &&
@@ -248,6 +323,41 @@ function isStoredRun(value: unknown): value is StoredRun {
     typeof run.updatedAt === 'string' &&
     Number.isFinite(Date.parse(run.updatedAt))
   );
+}
+
+function validCleanupReport(value: unknown, sessionId: string): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const r = value as ComputeCleanupReport;
+  const identifiers = (v: unknown): v is string[] =>
+    Array.isArray(v) &&
+    v.length <= 20 &&
+    v.every((id) => typeof id === 'string' && /^[A-Za-z0-9:_-]{1,128}$/.test(id));
+  if (
+    r.runKey !== sessionId ||
+    !identifiers(r.pendingJobIds) ||
+    !identifiers(r.pendingLaunchKeys) ||
+    typeof r.complete !== 'boolean' ||
+    r.complete !== (r.pendingJobIds.length + r.pendingLaunchKeys.length === 0) ||
+    !Array.isArray(r.settled) ||
+    r.settled.length > 1
+  )
+    return false;
+  return r.settled.every((job) => {
+    const receipt = job?.receipt;
+    return (
+      typeof job?.job_id === 'string' &&
+      /^[A-Za-z0-9:_-]{1,128}$/.test(job.job_id) &&
+      ['completed', 'failed', 'cancelled'].includes(job.status) &&
+      Number.isSafeInteger(job.maximum_usdc_micros) &&
+      job.maximum_usdc_micros > 0 &&
+      job.maximum_usdc_micros <= 200000 &&
+      receipt &&
+      [receipt.runtime_secs, receipt.charged_usdc_micros, receipt.refunded_usdc_micros].every(
+        (n) => Number.isSafeInteger(n) && n >= 0,
+      ) &&
+      receipt.charged_usdc_micros + receipt.refunded_usdc_micros === job.maximum_usdc_micros
+    );
+  });
 }
 
 export class IdempotencyConflictError extends Error {

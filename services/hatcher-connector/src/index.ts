@@ -11,6 +11,7 @@ import { HttpDaemonClient } from './daemon.js';
 import { Connector } from './connector.js';
 import { WsTransport } from './wsTransport.js';
 import { parseManifest, type ManifestCapability } from './manifest.js';
+import { registerArtifactProxy } from './artifacts.js';
 
 async function main(): Promise<void> {
   const log = pino({ level: process.env.LOG_LEVEL ?? 'info' });
@@ -35,34 +36,41 @@ async function main(): Promise<void> {
 
   const daemon = new HttpDaemonClient(cfg.daemonUrl, cfg.daemonToken, cfg.daemonTimeoutMs, cfg.daemonRetries);
 
+  let connector: Connector;
   const transport = new WsTransport({
     url: cfg.hatcherUrl,
     token: cfg.hatcherToken,
+    backoffBaseMs: cfg.hatcherReconnectBaseMs,
+    backoffMaxMs: cfg.hatcherReconnectMaxMs,
     pairingCode: cfg.pairingCode,
-    agentId: process.env.HATCHER_AGENT_ID,
+    agentId: cfg.agentId,
     connectorId: process.env.HATCHER_CONNECTOR_ID,
+    inFlight: () => connector?.inFlightIds ?? [],
     log: (msg, extra) => log.info(extra ?? {}, msg),
   });
 
-  const connector = new Connector(daemon, transport, {
+  connector = new Connector(daemon, transport, {
     maxConcurrentDispatch: cfg.maxConcurrentDispatch,
     defaultDeadlineMs: cfg.defaultDeadlineMs,
     manifestCapabilities,
+    agentId: cfg.agentId,
+    gpuEnabled: cfg.gpuEnabled,
     log: (msg, extra) => log.info(extra ?? {}, msg),
   });
 
   const app = Fastify({ logger: false });
   app.get('/healthz', async () => {
     const daemonUp = await daemon.health();
-    return { status: daemonUp ? 'ok' : 'degraded', daemon: daemonUp, in_flight: connector.inFlight };
+    return { status: daemonUp && transport.connectionState.socket === 'open' ? 'ok' : 'degraded', daemon: daemonUp, mesh: transport.connectionState, gpu_enabled: cfg.gpuEnabled, in_flight: connector.inFlight };
   });
+  if (cfg.artifactOrigin) registerArtifactProxy(app, cfg.artifactOrigin);
   await app.listen({ port: cfg.port, host: '0.0.0.0' });
 
   // Connect to the mesh in the background so boot doesn't block on mesh availability;
   // WsTransport retries with capped backoff.
   void connector.start().catch((err) => log.error({ err: String(err) }, 'mesh connect loop ended'));
 
-  log.info({ port: cfg.port, daemonUrl: cfg.daemonUrl, hatcherUrl: cfg.hatcherUrl }, 'hatcher-connector up (transport: ws)');
+  log.info({ port: cfg.port, gpu_enabled: cfg.gpuEnabled }, 'hatcher-connector up (transport: ws; authentication unverified)');
 }
 
 main().catch((err) => {

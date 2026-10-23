@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Connector } from './connector.js';
 import { StubTransport } from './transport.js';
-import { DaemonUnreachableError, type DaemonClient, type AgentEvent, type GrantRequest, type IntegrityReport } from './daemon.js';
+import { DaemonUnreachableError, type DaemonClient, type AgentEvent, type GrantRequest, type IntegrityReport, type IntentExecution } from './daemon.js';
 import type { ManifestCapability } from './manifest.js';
 
 class FakeDaemon implements DaemonClient {
@@ -13,17 +13,25 @@ class FakeDaemon implements DaemonClient {
   status = 'running';
   failResult = false;
   resultStatus: unknown = 'ok'; // intentResult's reported status; set non-string to model a result without one
+  executions: Array<IntentExecution | undefined> = [];
+  stops: string[] = [];
 
   async health(): Promise<boolean> {
     return true;
   }
-  async submitIntent(text: string) {
+  async submitIntent(text: string, execution?: IntentExecution) {
     this.submitted.push(text);
+    this.executions.push(execution);
     return { intent_id: 'int-1', status: this.status, text: '', sources: ['hermes'] };
   }
   async intentResult() {
     if (this.failResult) throw new Error('daemon /intents/int-1/result -> 404');
     return { kind: 'intent_outcome', intent_id: 'int-1', status: this.resultStatus };
+  }
+  async stopIntent(id: string) {
+    this.stops.push(id);
+    this.resultStatus = 'cancelled';
+    return { accepted: true };
   }
   async streamEvents(_id: string, onEvent: (e: AgentEvent) => void): Promise<void> {
     for (const e of this.events) onEvent(e);
@@ -364,7 +372,7 @@ describe('Connector dispatch flow', () => {
     expect(result.status).toBe('cancelled');
   });
 
-  it('defaults to a success status when the daemon result carries no string status field', async () => {
+  it('keeps tracking when the daemon result carries no string status field', async () => {
     const daemon = new FakeDaemon();
     daemon.status = 'ok';
     daemon.resultStatus = undefined; // result without a usable status
@@ -375,8 +383,118 @@ describe('Connector dispatch flow', () => {
     await flush();
     await flush();
 
-    const result = transport.sent.at(-1) as { status: string };
-    // daemonStatus false-arm fallback: a missing/non-string status defaults to 'ok' → meshStatus 'success'.
-    expect(result.status).toBe('success');
+    expect(transport.sent.some((f) => f.type === 'result')).toBe(false);
+    expect(connector.inFlight).toBe(1);
+    transport.inject({ v: 1, type: 'cancel', dispatch_id: 'ns' });
+    await flush();
+    expect(daemon.stops).toEqual(['int-1']);
+    expect(connector.inFlight).toBe(0);
+  });
+
+  it('forwards the explicit GPU policy and enforced grant, with a stable replay key', async () => {
+    const daemon = new FakeDaemon();
+    const transport = new StubTransport();
+    const connector = new Connector(daemon, transport, { maxConcurrentDispatch: 1, defaultDeadlineMs: 60_000, manifestCapabilities: [], agentId: 'full-agent-id', gpuEnabled: true });
+    await connector.start();
+    const frame = { v: 1 as const, type: 'dispatch' as const, dispatch_id: 'gpu-1', agent_id: 'full-agent-id', intent: { text: 'GPU smoke', context: { max_cost_usd: 0.50, gpu: { duration_secs: 300 } } }, grants: [{ scope: 'compute.gpu_workspace', constraints: { max_usdc_micros: 200_000, duration_secs: 300, max_launches: 1 } }] };
+    transport.inject(frame);
+    await flush();
+    await flush();
+    transport.inject(frame);
+    await flush();
+    await flush();
+    expect(daemon.executions).toHaveLength(2);
+    expect(daemon.executions[0]).toEqual(daemon.executions[1]);
+    expect(daemon.executions[0]).toMatchObject({ run_key: expect.stringMatching(/^[a-f0-9]{64}$/), max_cost_usd: 0.50, gpu: frame.grants[0]!.constraints });
+    expect(daemon.grants).toContainEqual(expect.objectContaining({ action: 'compute.gpu_workspace', scope: frame.grants[0]!.constraints }));
+  });
+
+  it('grants native coder capabilities only for the authorized GPU run key and deadline', async () => {
+    const daemon = new FakeDaemon();
+    const transport = new StubTransport();
+    const connector = new Connector(daemon, transport, {
+      maxConcurrentDispatch: 1, defaultDeadlineMs: 60_000, manifestCapabilities: [],
+      agentId: 'full-agent-id', gpuEnabled: true, now: () => 1_000,
+    });
+    await connector.start();
+
+    transport.inject({ v: 1, type: 'dispatch', dispatch_id: 'ordinary', agent_id: 'full-agent-id', intent: { text: 'ordinary work' }, deadline_ms: 5_000 });
+    await flush();
+    await flush();
+    expect(daemon.grants).toEqual([{ action: 'memory.write', expires_at: 5_000 }]);
+    const ordinaryRunKey = daemon.executions[0]!.run_key;
+
+    daemon.grants = [];
+    transport.inject({
+      v: 1, type: 'dispatch', dispatch_id: 'authorized-gpu', agent_id: 'full-agent-id',
+      intent: { text: 'GPU smoke', context: { max_cost_usd: 0.50 } }, deadline_ms: 5_000,
+      grants: [{ scope: 'compute.gpu_workspace', constraints: { max_usdc_micros: 200_000, duration_secs: 300, max_launches: 1 } }],
+    });
+    await flush();
+    await flush();
+    const gpuRunKey = daemon.executions[1]!.run_key;
+    expect(gpuRunKey).not.toBe(ordinaryRunKey);
+    expect(daemon.grants.filter((grant) => ['intent.subscribe', 'tool.code'].includes(grant.action))).toEqual([
+      { action: 'intent.subscribe', scope: { version: 1, run_key: gpuRunKey }, expires_at: 5_000 },
+      { action: 'tool.code', scope: { version: 1, run_key: gpuRunKey }, expires_at: 5_000 },
+    ]);
+    expect(daemon.grants.filter((grant) => grant.action === 'memory.write')).toEqual([
+      { action: 'memory.write', expires_at: 5_000 },
+    ]);
+  });
+
+  it('does not admit GPU intent context without a consent grant', async () => {
+    const daemon = new FakeDaemon();
+    const { transport, connector } = build(daemon);
+    await connector.start();
+    transport.inject({ v: 1, type: 'dispatch', dispatch_id: 'no-grant', agent_id: 'PK', intent: { text: 'GPU', context: { max_cost_usd: 0.50, gpu: { duration_secs: 300 } } } });
+    await flush();
+    expect(daemon.submitted).toEqual([]);
+    expect(daemon.grants).toEqual([]);
+    expect(transport.sent[0]).toMatchObject({ type: 'error', code: 'not_admitted' });
+    expect(connector.inFlight).toBe(0);
+  });
+
+  it('keeps a stopping workload tracked after cancel, reports cleanup_pending, then relays confirmed cancellation', async () => {
+    vi.useFakeTimers();
+    try {
+      const daemon = new FakeDaemon();
+      daemon.resultStatus = 'running';
+      daemon.streamEvents = () => new Promise<void>(() => {});
+      const stop = vi.spyOn(daemon, 'stopIntent').mockImplementation(async () => ({ accepted: true }));
+      const transport = new StubTransport();
+      const connector = new Connector(daemon, transport, { maxConcurrentDispatch: 1, defaultDeadlineMs: 60_000, manifestCapabilities: [], terminalPollMs: 5, cancelTimeoutMs: 10 });
+      await connector.start();
+      transport.inject({ v: 1, type: 'dispatch', dispatch_id: 'cancel-pending', agent_id: 'PK', intent: { text: 'work' } });
+      await vi.advanceTimersByTimeAsync(1);
+      transport.inject({ v: 1, type: 'cancel', dispatch_id: 'cancel-pending' });
+      daemon.resultStatus = 'stopping';
+      await vi.advanceTimersByTimeAsync(20);
+      expect(stop).toHaveBeenCalledWith('int-1');
+      expect(connector.inFlight).toBe(1);
+      expect(transport.sent.some((f) => f.type === 'result')).toBe(false);
+      expect(transport.sent).toContainEqual(expect.objectContaining({ type: 'error', code: 'cleanup_pending' }));
+      daemon.resultStatus = 'cancelled';
+      await vi.advanceTimersByTimeAsync(10);
+      expect(connector.inFlight).toBe(0);
+      expect(transport.sent.filter((f) => f.type === 'result')).toEqual([expect.objectContaining({ status: 'cancelled' })]);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('requests workload stop at the dispatch deadline instead of discarding tracking', async () => {
+    vi.useFakeTimers();
+    try {
+      const daemon = new FakeDaemon();
+      daemon.resultStatus = 'running';
+      daemon.streamEvents = () => new Promise<void>(() => {});
+      const transport = new StubTransport();
+      const connector = new Connector(daemon, transport, { maxConcurrentDispatch: 1, defaultDeadlineMs: 10, manifestCapabilities: [], terminalPollMs: 5 });
+      await connector.start();
+      transport.inject({ v: 1, type: 'dispatch', dispatch_id: 'timeout', agent_id: 'PK', intent: { text: 'work' } });
+      await vi.advanceTimersByTimeAsync(20);
+      expect(daemon.stops).toEqual(['int-1']);
+      expect(transport.sent.at(-1)).toMatchObject({ type: 'result', status: 'cancelled' });
+      expect(connector.inFlight).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 });

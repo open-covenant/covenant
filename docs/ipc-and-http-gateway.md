@@ -294,7 +294,7 @@ Because the trace is published live with no backfill, a client follows a specifi
 - `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, see `main.rs:3811`). Pinned at the type level by the schema test (`main.rs:7523-7526`) — JSON consumers must never receive a string here.
 - `capabilities` (array of `SignedCapability`): the filtered live capabilities. Each element has shape `{capability: Capability, signature: <base58>}` where `Capability` is defined at `agent-os/crates/covenant-types/src/lib.rs:224` (fields: `subject`, `action`, `scope`, `granted_by`, `expires_at`) and `SignedCapability` is defined at `agent-os/crates/covenant-permissions/src/lib.rs:58`. The `signature` field is the base58 encoding of the 64-byte ed25519 signature (per the `sig_b58` serde module at `lib.rs:64-84`), never the raw byte array. Pinned as an array by `main.rs:7527-7530` — never null or a string.
 
-The daemon applies a **peer-visibility filter** before returning the list (see `recent_capabilities` at `agent-os/crates/covenantd/src/lib.rs:16503-16519`): only capabilities whose `subject.pubkey` or `granted_by.pubkey` matches the requesting peer's pubkey are included. JSON consumers must not assume this is a global registry dump — operator and delegated callers see a different slice of the same store.
+The daemon applies a **peer-visibility filter** before returning the list (see `recent_capabilities` at `agent-os/crates/covenantd/src/lib.rs:16689-16705`): only capabilities whose `subject.pubkey` or `granted_by.pubkey` matches the requesting peer's pubkey are included. JSON consumers must not assume this is a global registry dump — operator and delegated callers see a different slice of the same store.
 
 Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:7506` (`capability_list_json_pins_top_level_schema`), which exercises both a populated single-capability case and an empty list.
 
@@ -401,12 +401,12 @@ The envelope source-of-truth lives at `peer_revoke_json` in `agent-os/crates/cov
 - `since_ms` (u64 or null): the Unix-epoch millisecond threshold echoed from `--since-ms`, or `null` when the flag was omitted. Pinned as u64-or-null at the schema test (`main.rs:8008-8011`) — never a string-of-integer. Same semantic as the HTTP gateway query parameter described in the **Query Parameters** section above: events whose `timestamp_ms` is strictly less than the threshold are dropped before the limit truncation.
 - `events` (array of `AuditEvent`): the matched events. The array is empty when no events fall in the window. Pinned as an array by `main.rs:8012-8015` — never null or a string.
 
-The inner `AuditEvent` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:45`:
+The inner `AuditEvent` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:47`:
 
 - `id` (string) — event UUID.
 - `timestamp_ms` (u64) — Unix-epoch milliseconds when the event was recorded.
 - `issuer` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:177`.
-- `kind` (object) — tagged-enum `AuditKind` (defined at `covenant-audit/src/lib.rs:153` onwards) with a `type` discriminator (e.g., `"capability_granted"`, `"intent_dispatched"`, `"hermes_tool_invoked"`) and variant-specific extra fields. Consumers must route on `kind.type` before reading variant-specific fields.
+- `kind` (object) — tagged-enum `AuditKind` (defined at `covenant-audit/src/lib.rs:155` onwards) with a `type` discriminator (e.g., `"capability_granted"`, `"intent_dispatched"`, `"hermes_tool_invoked"`) and variant-specific extra fields. Consumers must route on `kind.type` before reading variant-specific fields.
 
 Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7987` (`audit_recent_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, empty with `since_ms`, and empty without `since_ms`.
 
@@ -429,7 +429,7 @@ The envelope source-of-truth lives at `audit_purge_json` in `agent-os/crates/cov
 - `kind`: literal string `"audit_integrity"` — past-tense outcome name, distinct from the verb name `verify` and from the workspace-level `verify_report` envelope; consumers routing on `kind` must match this literal exactly rather than reusing either of those tokens. Pinned at the value level by `main.rs:8081` (asserts `value["kind"].as_str() == Some("audit_integrity")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `report` (object): a structured `covenant_audit::AuditIntegrityReport`, never a string blob. The top-level object has exactly two keys (`kind` and `report`); the inner `report` is pinned by the schema test at `main.rs:8082-8085` to be a JSON object.
 
-The inner `AuditIntegrityReport` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:63`:
+The inner `AuditIntegrityReport` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:65`:
 
 - `events` (u64) — total audit events the integrity walk visited.
 - `anchors` (u64) — count of anchor records (root-hash checkpoints) the walk crossed.

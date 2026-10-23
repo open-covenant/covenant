@@ -258,15 +258,91 @@ pub enum RunnerError {
     /// outcome, distinct from a transport/gateway fault ([`Self::Remote`]).
     #[error("remote run failed: {message}")]
     RunFailed { message: String },
+    /// A failed run can still have final cleanup receipts and accounting.
+    /// Keep that evidence separate from the concise error so logs do not
+    /// duplicate the final output or discard it as a transport failure.
+    #[error("remote run failed: {message}")]
+    RunFailedWithOutput { message: String, output: String },
     /// The remote run was cancelled (by operator stop or upstream).
     /// An outcome, not a transport fault.
     #[error("remote run was cancelled")]
     RunCancelled,
+    #[error("remote run was cancelled: {output}")]
+    RunCancelledWithOutput { output: String },
+}
+
+/// Explicit, per-dispatch authorization for the bounded Hatcher GPU trial.
+/// These values are forwarded outside the model's prompt and cannot be widened
+/// by tool arguments. The gateway applies its own, possibly smaller, ceilings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionOptions {
+    pub run_key: String,
+    pub max_cost_usd: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<GpuExecutionPolicy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GpuExecutionPolicy {
+    pub max_usdc_micros: u64,
+    pub duration_secs: u64,
+    pub max_launches: u32,
+}
+
+impl ExecutionOptions {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.run_key.is_empty()
+            || self.run_key.len() > 128
+            || !self.run_key.as_bytes()[0].is_ascii_alphanumeric()
+            || !self
+                .run_key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+        {
+            return Err("execution.run_key must be a safe 1-128 character idempotency key");
+        }
+        if !self.max_cost_usd.is_finite() || self.max_cost_usd <= 0.0 || self.max_cost_usd > 2.0 {
+            return Err("execution.max_cost_usd must be greater than zero and at most 2.00");
+        }
+        if let Some(gpu) = &self.gpu {
+            if self.max_cost_usd <= 0.2 {
+                return Err("GPU execution.max_cost_usd must exceed the 0.20 GPU reservation");
+            }
+            if gpu.max_usdc_micros != 200_000 || gpu.duration_secs != 300 || gpu.max_launches != 1 {
+                return Err("GPU execution requires one 300-second booking and a 200000 micro-USDC total ceiling");
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
 pub trait Runner: Send + Sync {
     async fn run(&self, card: &AgentCard, intent: &Intent) -> Result<AgentResult, RunnerError>;
+
+    async fn run_with_options(
+        &self,
+        card: &AgentCard,
+        intent: &Intent,
+        options: Option<&ExecutionOptions>,
+    ) -> Result<AgentResult, RunnerError> {
+        if options.is_some() {
+            return Err(RunnerError::RunFailed {
+                message: "runner does not support explicit execution authorization".into(),
+            });
+        }
+        self.run(card, intent).await
+    }
+
+    /// Request a stop; success acknowledges the request, not settlement.
+    /// The daemon verifies the intent's issuer before calling this hook.
+    async fn cancel_intent(&self, _intent_id: uuid::Uuid) -> Result<(), RunnerError> {
+        Err(RunnerError::RunFailed {
+            message: "runner does not support intent cancellation".into(),
+        })
+    }
 }
 
 fn parse_result(stdout_buf: &[u8], stderr: String) -> Result<AgentResult, RunnerError> {
@@ -1486,6 +1562,32 @@ impl Runner for CompositeRunner {
             }
         }
     }
+
+    async fn run_with_options(
+        &self,
+        card: &AgentCard,
+        intent: &Intent,
+        options: Option<&ExecutionOptions>,
+    ) -> Result<AgentResult, RunnerError> {
+        match card.manifest.agent.runtime {
+            RuntimeKind::Hermes => match &self.hermes {
+                Some(h) => h.run_with_options(card, intent, options).await,
+                None => Err(RunnerError::HermesUnconfigured {
+                    agent: card.id.clone(),
+                }),
+            },
+            _ => self.local.run_with_options(card, intent, options).await,
+        }
+    }
+
+    async fn cancel_intent(&self, intent_id: uuid::Uuid) -> Result<(), RunnerError> {
+        match &self.hermes {
+            Some(h) => h.cancel_intent(intent_id).await,
+            None => Err(RunnerError::HermesUnconfigured {
+                agent: "coder".into(),
+            }),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1496,6 +1598,49 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
     use uuid::Uuid;
+
+    #[test]
+    fn gpu_execution_authorization_rejects_widening_and_unsafe_run_keys() {
+        let valid = ExecutionOptions {
+            run_key: "hatcher:agent:dispatch-1".into(),
+            max_cost_usd: 1.0,
+            gpu: Some(GpuExecutionPolicy {
+                max_usdc_micros: 200_000,
+                duration_secs: 300,
+                max_launches: 1,
+            }),
+        };
+        assert!(valid.validate().is_ok());
+        for key in ["", "../other", "has space", "?query"] {
+            assert!(ExecutionOptions {
+                run_key: key.into(),
+                ..valid.clone()
+            }
+            .validate()
+            .is_err());
+        }
+        for cost in [f64::NAN, f64::INFINITY, -1.0, 0.2, 2.01] {
+            assert!(ExecutionOptions {
+                max_cost_usd: cost,
+                ..valid.clone()
+            }
+            .validate()
+            .is_err());
+        }
+        let mut wider = valid.clone();
+        wider.gpu.as_mut().unwrap().max_launches = 2;
+        assert!(wider.validate().is_err());
+        wider = valid.clone();
+        wider.gpu.as_mut().unwrap().duration_secs = 301;
+        assert!(wider.validate().is_err());
+        wider = valid;
+        wider.gpu.as_mut().unwrap().max_usdc_micros = 200_001;
+        assert!(wider.validate().is_err());
+        assert!(serde_json::from_value::<ExecutionOptions>(json!({
+            "run_key": "safe", "max_cost_usd": 1,
+            "gpu": { "max_usdc_micros": 200000, "duration_secs": 300, "max_launches": 1, "unlimited": true }
+        })).is_err());
+    }
 
     #[test]
     fn workspace_entry_strips_one_leading_dot_slash_and_prepends_workspace_prefix() {

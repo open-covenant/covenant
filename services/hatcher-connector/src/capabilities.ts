@@ -26,6 +26,7 @@
 import type { GrantRequest } from './daemon.js';
 import type { ManifestCapability } from './manifest.js';
 import type { MeshGrant } from './transport.js';
+import { gpuGrant, GPU_SCOPE } from './execution.js';
 
 export interface ConsentPolicy {
   fs?: { read: string[]; write: string[] };
@@ -116,6 +117,12 @@ export function mapMeshGrants(grants: MeshGrant[], expiresAt: number): MappedMan
   for (const g of grants) {
     const c = (g.constraints ?? {}) as Record<string, unknown>;
     switch (g.scope.split('.')[0]) {
+      case 'compute': {
+        const gpu = gpuGrant(g);
+        out.push({ action: GPU_SCOPE, scope: gpu, expires_at: expiresAt });
+        policy.notes.push('GPU execution requires explicit per-dispatch authorization and enforced spend, duration, and launch bounds');
+        break;
+      }
       case 'filesystem': {
         const fs = (policy.fs ??= { read: [], write: [] });
         const paths = Array.isArray(c.paths) ? (c.paths as string[]) : [];

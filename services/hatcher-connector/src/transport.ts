@@ -41,7 +41,7 @@ export type OutboundFrame =
   | { v: 1; type: 'pong'; ts: number };
 
 export interface HatcherTransport {
-  // Resolves once the outbound channel is established + paired.
+  // Resolves once the socket is open. This does not confirm mesh authentication/pairing.
   connect(): Promise<void>;
   // Register the handler invoked for each inbound frame.
   onFrame(handler: (frame: InboundFrame) => void): void;

@@ -11,7 +11,22 @@ The limits are the ones already enforced for the smoke test: one 300-second
 booking capped at $0.20 of GPU time, and $0.50 for the whole dispatch. Covenant
 pays for GPU start-up time and provider overruns.
 
-## Rollout
+## October 23 timeout correction
+
+The Hatcher dispatch below timed out with no returned outputs, despite the
+original terminal status incorrectly reporting success. Cleanup and the
+$0.0758231 receipt are preserved. See [incident and diagnostics](gpu-embeddings/README.md)
+for the verified timing distinction and the limits of the retained setup logs.
+
+Release `00d5f26b032bcb5c3cdce20bb474f696462b45ff` changes the gateway and daemon
+so a failed GPU command remains failed while its final receipt is delivered.
+Deploy both with no work in flight, then verify the live revisions, readiness,
+unchanged dispatch pin and stored state. Connector production code is unchanged.
+The new phase-logging scripts are available at that same revision; a future
+approved payload must pin it. The payload below documents the original attempt
+and must not be resent. No replacement dispatch is armed by this correction.
+
+## Initial rollout
 
 All three services stay on branch `codex/hatcher-gpu-smoke`. The daemon is
 unchanged. Deploy the gateway first, then the connector, with no dispatch in
@@ -86,14 +101,17 @@ Use `deadline_ms = Date.now() + 600000`.
 
 ## What comes back
 
-The final result ends with three bracketed blocks:
+The corrected final result includes these bracketed blocks:
 
-- `[gpu_workspace outputs: [...]]`: `embeddings.npy` and `report.json`, each
+- `[gpu_workspace workload: {...}]`: command outcome and phase timings, separate
+  from provider billing intervals. A timeout or missing declared output fails the dispatch.
+- `[gpu_workspace outputs: [...]]`: when available, `embeddings.npy` and `report.json`, each
   with its size, SHA-256 and a download link valid for seven days.
 - `[gpu_workspace final receipts: [...]]`: the GPU's settled receipt.
-- `[run accounting: {...}]`: the receipt, version 2. With `final: true` the GPU,
-  model and sandbox lines are amounts charged and add up to `totalUsd`.
-  `coveredByCovenant` lists GPU start-up time, which is not charged.
+- `[run accounting: {...}]`: the receipt, version 2. With `final: true` the GPU
+  settlement, model usage valuation and sandbox tariff calculation add up to
+  `totalUsd`. This is not an authoritative consolidated provider invoice.
+  `coveredByCovenant` lists GPU start-up time excluded from the dispatch charge.
 
 `report.json` names the GPU, driver, ONNX Runtime version and execution
 provider, the GPU memory in use before and with the model loaded, the input
@@ -134,5 +152,6 @@ plane refusing that machine's stale quote.
 
 About one minute of GPU start-up (Covenant pays), one to three minutes of
 installs and embedding at the cheapest offer, a few model turns, and a sandbox
-open for a few minutes. Under $0.10 of GPU time; the $0.20 and $0.50 caps hold
-regardless.
+open for a few minutes. These are estimates: cold setup consumes the same bounded
+command window and can time out. The operating limits remain $0.20 GPU and
+$0.50 total; Covenant covers provider startup and cleanup overruns separately.

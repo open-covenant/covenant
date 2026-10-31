@@ -6,6 +6,7 @@ import { createRegistry } from '../../src/chain/registry.js';
 import { createPools, poolIdOf, readCursor, writeCursor } from '../../src/chain/pools.js';
 import type { CallOutcome, ContractCall, DeskChainClient } from '../../src/chain/client.js';
 import type { Address, Hex32, Pool } from '../../src/core/types.js';
+import type { BlockRange } from '../../src/chain/logs.js';
 
 const USDG: Address = '0x5fc5360d0400a0fd4f2af552add042d716f1d168';
 const AAPL: Address = '0xaf3d76f1834a1d425780943c99ea8a608f8a93f9';
@@ -249,5 +250,75 @@ describe('forToken', () => {
     const { store, pools } = poolsFor(new Map());
     store.upsertPool(referencePool);
     expect(await pools.forToken(AAPL, { counterparties: ['0x'.padEnd(42, '9') as Address] })).toEqual([]);
+  });
+});
+
+describe('discovery', () => {
+  it('cuts a range the node refuses for its span into the span the node allows', async () => {
+    const asked: BlockRange[] = [];
+    const client = {
+      ...stubClient(new Map()),
+      async request<T>(_method: string, params: readonly unknown[]): Promise<T> {
+        const filter = params[0] as { fromBlock: string; toBlock: string };
+        const from = BigInt(filter.fromBlock);
+        const to = BigInt(filter.toBlock);
+        if (to - from + 1n > 30_000n) {
+          throw Object.assign(new Error('Missing or invalid parameters.'), {
+            code: -32602,
+            details:
+              `query spans ${to - from + 1n} blocks (${from} to ${to}), but only 30000 are ` +
+              'allowed for this request; narrow the block range, or add an address filter',
+          });
+        }
+        asked.push({ from, to });
+        return [] as T;
+      },
+    } satisfies DeskChainClient;
+    const store = openStore({ path: ':memory:' });
+    const logger = silentLogger();
+    const registry = createRegistry({
+      config: defaultConfig(),
+      logger,
+      store,
+      fetchImpl: (() => {}) as unknown as typeof fetch,
+    });
+    const tokens = {
+      read: async () => [],
+      balanceOf: async () => {
+        throw new Error('not used');
+      },
+      balanceOfUi: async () => {
+        throw new Error('not used');
+      },
+      decimalsOf: async () => new Map<string, number>(),
+    };
+    const pools = createPools({
+      client,
+      logger,
+      store,
+      registry,
+      tokens,
+      stateViewAddress: STATE_VIEW,
+    });
+
+    const found = await pools.discover({
+      currencies: [AAPL],
+      fromBlock: 0n,
+      toBlock: 99_999n,
+      persist: false,
+      resolveDecimals: false,
+    });
+
+    expect(found).toEqual([]);
+    // Both topic positions, each covered by four answered queries of at most 30,000 blocks.
+    expect(asked).toHaveLength(8);
+    for (const position of [asked.slice(0, 4), asked.slice(4)]) {
+      expect(position).toEqual([
+        { from: 0n, to: 29_999n },
+        { from: 30_000n, to: 59_999n },
+        { from: 60_000n, to: 89_999n },
+        { from: 90_000n, to: 99_999n },
+      ]);
+    }
   });
 });

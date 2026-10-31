@@ -7,7 +7,9 @@ import {
   isQueryTimeoutError,
   isRangeTooWideError,
   isRateLimitError,
+  isSpanLimitError,
   rangeSize,
+  spanLimitOf,
   splitRange,
 } from '../../src/chain/logs.js';
 
@@ -78,6 +80,21 @@ describe('error classification', () => {
     });
     expect(isQueryTimeoutError(error)).toBe(true);
     expect(isRangeTooWideError(error)).toBe(true);
+  });
+
+  it('recognises the block span refusal and the span it allows', () => {
+    // What the Robinhood Chain RPC answers a topic-only query over two million blocks.
+    const error = Object.assign(new Error('Missing or invalid parameters.'), {
+      code: -32602,
+      details:
+        'query spans 1999984 blocks (92984479 to 94984462), but only 30000 are allowed for ' +
+        'this request; narrow the block range, or add an address filter',
+    });
+    expect(isSpanLimitError(error)).toBe(true);
+    expect(spanLimitOf(error)).toBe(30_000n);
+    expect(isRangeTooWideError(error)).toBe(true);
+    expect(isRateLimitError(error)).toBe(false);
+    expect(spanLimitOf(new Error('logs matched by query exceeds limit of 10000'))).toBeUndefined();
   });
 
   it('reads a Cloudflare challenge as a signal to slow down', () => {

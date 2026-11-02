@@ -183,16 +183,16 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
 
       <h2>x402 payment rail</h2>
       <p>
-        Distinct from the internal receipt flush above, the agent-to-service
-        payment rail over HTTP 402 (x402) is live. The daemon can pay for
-        metered x402 resources outbound, and Covenant operates a deployed
-        x402 seller that settles in USDC on Solana mainnet &mdash; selling
-        Covenant-Verified attestations, on-chain identity passports, and
-        reputation reads, with the seller&rsquo;s signing key published at
-        <code>/.well-known/x402</code> &mdash; alongside an escrow service and
-        an Ephemeral-Rollup credit facilitator. This is a
-        separate concern from anchoring internal resource receipts: the
-        payment rail being live does not make the receipt flush production.
+        Distinct from the internal receipt flush above, Covenant exposes and
+        consumes paid resources over HTTP 402 (x402). The daemon can pay for
+        metered x402 resources outbound, and Covenant&rsquo;s x402 seller
+        settles in USDC on Solana mainnet, selling Covenant-Verified
+        attestations, on-chain identity passports, and reputation reads, with
+        the seller&rsquo;s signing key advertised at{" "}
+        <code>/.well-known/x402</code>, alongside an escrow service and an
+        Ephemeral-Rollup credit facilitator. Anchoring internal resource
+        receipts is a separate concern, and that lifecycle is not yet
+        production.
       </p>
 
       <h2>Release</h2>

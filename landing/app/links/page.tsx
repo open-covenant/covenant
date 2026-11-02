@@ -31,7 +31,7 @@ export const metadata: Metadata = pageMetadata("/links", { title: "Links" }, {
 type LinkItem = { label: string; href: string; note?: string };
 
 const PRIMARY: LinkItem[] = [
-  { label: "Try the sandbox", href: "https://sandbox.opencovenant.org", note: "Live operator console, no install" },
+  { label: "Try the sandbox", href: "https://sandbox.opencovenant.org", note: "Operator console, no install" },
   { label: "Read the docs", href: "https://docs.opencovenant.org", note: "Concepts, primitives, API" },
   { label: "Source on GitHub", href: GITHUB_URL, note: "Apache-2.0, built in the open" },
 ];

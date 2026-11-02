@@ -113,7 +113,7 @@ echo "$payment_requirements_json" | covenant-x402-signer   # -> base64 X-PAYMENT
 
       <h2>Exposing a paid resource (inbound)</h2>
       <p>
-        Covenant runs a public x402 seller at{" "}
+        Covenant&rsquo;s x402 seller is deployed at{" "}
         <code>https://x402-seller.opencovenant.org</code>. It sells
         Covenant-signed trust reads, all advertised at{" "}
         <code>GET /.well-known/x402</code>:
@@ -132,15 +132,16 @@ GET  /x402/er/enclave/<validator>      a live TDX verification of a MagicBlock e
         result. Returning a status of 400 or higher from the resource cancels
         settlement, so a caller is never charged for an error.
       </p>
-      <p>The endpoints are discoverable and monitored:</p>
+      <p>The endpoints are discoverable:</p>
       <ul>
         <li>
           <code>GET /.well-known/x402</code> advertises them so crawlers (the
           zauth directory, x402scan) can list the resources.
         </li>
         <li>
-          They are registered and health-monitored in the{" "}
-          <Link href="/zauth">zauth provider hub</Link> on Solana mainnet.
+          They register in the{" "}
+          <Link href="/zauth">zauth provider hub</Link> on Solana mainnet, which
+          health-monitors each listed endpoint.
         </li>
       </ul>
 

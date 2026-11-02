@@ -122,7 +122,7 @@ export default function OnePagerPage() {
               <li><b>Alpha released and cryptographically signed.</b> Public, keyless-signed build (v0.1.0-alpha.1).</li>
               <li><b>Settlement program deployed on Solana mainnet.</b> On-chain audit and attestation, not a promise.</li>
               <li><b>Safe-execution skills running real mainnet transactions.</b> Swap, stake, perps, and prediction, each gated and receipted.</li>
-              <li><b>x402 seller infrastructure live.</b> Paid, independently verifiable endpoints in production, settled in USDC on Solana mainnet.</li>
+              <li><b>x402 payment rail built.</b> Paid trust reads that settle in USDC on Solana mainnet, each payment verifiable on-chain.</li>
             </ul>
           </div>
         </div>

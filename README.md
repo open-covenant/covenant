@@ -22,7 +22,7 @@ Covenant sits below agent applications and above the host operating system. It o
 **Status.** Local control plane is real and live-tested (50 Rust crates, ~284k lines, 3870 source-discovered Rust tests including 486 live boundary tests). Production-grade sandboxing for hostile agent code and networked multi-peer operation are roadmap; the Solana settlement program is deployed on mainnet (credits, staking, slashing, on-chain receipt anchoring), but its daemon-driven economic lifecycle is not yet production. See [BUILT.md](./BUILT.md) for the explicit honesty boundary.
 <!-- METRICS:END -->
 
-**Multi-chain reach.** The trust layer also projects onto Base mainnet as signed statements any EVM contract verifies with one `ecrecover` — ERC-8004 agent registration, a deployed bond-receipt verifier, a registered EAS reputation schema, and an ENS CCIP-Read gateway (`*.agents.opencovenant.eth`) — while `$CVNT` stays a single Solana mint that is never bridged or wrapped and every per-call fee and bond is chain-local USDC. On-chain reputation writes and funded USDC bonds are registered but not yet exercised, while live x402 sellers settle chain-local USDC on both Solana and Base mainnet, and on Robinhood Chain mainnet (chain 4663) a USDG x402 payment and an on-chain bounded-spend escrow are proven with real USDG. See [docs/multichain-value-capture.md](./docs/multichain-value-capture.md).
+**Multi-chain reach.** The trust layer also projects onto Base mainnet as signed statements any EVM contract verifies with one `ecrecover` — ERC-8004 agent registration, a deployed bond-receipt verifier, a registered EAS reputation schema, and an ENS CCIP-Read gateway (`*.agents.opencovenant.eth`) — while `$CVNT` stays a single Solana mint that is never bridged or wrapped and every per-call fee and bond is chain-local USDC. On-chain reputation writes and funded USDC bonds are registered but not yet exercised, while x402 sellers settle chain-local USDC on both Solana and Base mainnet, and on Robinhood Chain mainnet (chain 4663) a USDG x402 payment and an on-chain bounded-spend escrow are proven with real USDG. See [docs/multichain-value-capture.md](./docs/multichain-value-capture.md).
 
 - **Web:** [opencovenant.org](https://opencovenant.org)
 - **Docs:** [docs.opencovenant.org](https://docs.opencovenant.org)
@@ -31,7 +31,7 @@ Covenant sits below agent applications and above the host operating system. It o
 
 ## Quick start
 
-> Try it without installing — **[sandbox.opencovenant.org](https://sandbox.opencovenant.org)**. Public operator console wired to a live daemon, state resets every 12 hours.
+> Try it without installing — **[sandbox.opencovenant.org](https://sandbox.opencovenant.org)**. Public operator console wired to a real daemon, state resets every 12 hours.
 
 To run it locally, build the daemon and CLI, register the sample agent, and start the daemon:
 
@@ -122,7 +122,7 @@ Covenant includes:
 - MCP adapter, native tool integration, and A2A mailbox primitives.
 - Budget ledger primitives with daemon-backed pause checkpoint storage for budget exhaustion, shutdown drains, and single-use resume handoff.
 - Local settlement receipts for resource accounting.
-- Agent-to-service payments over HTTP 402 (x402): the daemon can pay for metered resources outbound, and Covenant operates a live x402 seller that settles in USDC on Solana mainnet (paid Covenant-Verified attestations, on-chain identity passports, and reputation reads), alongside an escrow service and an Ephemeral-Rollup credit facilitator.
+- Agent-to-service payments over HTTP 402 (x402): the daemon can pay for metered resources outbound, and Covenant's x402 seller settles in USDC on Solana mainnet (paid Covenant-Verified attestations, on-chain identity passports, and reputation reads), alongside an escrow service and an Ephemeral-Rollup credit facilitator.
 - Multi-chain trust projection onto Base mainnet: ERC-8004 agent registration, a deployed bond-receipt verifier and EAS reputation schema, EAS off-chain attestations for audit roots and reputation, and an ENS CCIP-Read gateway (`*.agents.opencovenant.eth`) that resolves to the canonical Solana identity — each verifiable with one `ecrecover`, no bridge and no cross-chain token. On-chain reputation scores and funded USDC bonds are not yet exercised. The same stateless verifier design and x402 rail also reach Robinhood Chain mainnet (chain 4663): a USDG x402 payment has settled on mainnet in real USDG, and a `SpendGrantEscrow` contract enforces bounded agent spend with its charge, release, and refund loop proven on Robinhood Chain testnet, while the bond and reputation verifiers are deployed but not yet exercised and no ERC-8004 identity is projected there. See [docs/multichain-value-capture.md](./docs/multichain-value-capture.md).
 - Commit-scoped provenance envelopes that bind task records, changed Git blobs, transition events, and validation evidence.
 - Unsigned or locally signed audit-root attestations for local integrity reports, with release-target binding to release-subject and release-scope manifests so a single attestation covers the audit log, the release artifact set, and the in-scope task set.

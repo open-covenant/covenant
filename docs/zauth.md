@@ -20,12 +20,12 @@ directory when looking for paid services.
 The signing path reuses `covenant-x402` (`PayaiSolanaSigner`); zauth adds no
 new key handling.
 
-## Live integration
+## Hub integration
 
-Covenant's public x402 seller (`https://x402-seller.opencovenant.org`, see
-[Covenant x402](./x402.md)) is registered and health-monitored in the zauth
-provider hub on Solana mainnet. The hub lists the endpoint, periodically
-health-checks the registered URL, and tracks provider telemetry reported by the
+Covenant's x402 seller (`https://x402-seller.opencovenant.org`, see
+[Covenant x402](./x402.md)) registers in the zauth provider hub on Solana
+mainnet. The hub lists live endpoints, periodically health-checks each
+registered URL, and tracks provider telemetry reported by the
 `@zauthx402/sdk` provider middleware mounted on the seller.
 
 One operational detail worth stating plainly: the hub registers a selling

@@ -114,9 +114,9 @@ export default function MultichainPage() {
         payment challenges per call. The same rail extends to Base:{" "}
         <code>covenant-x402</code> signs EIP-3009 USDC authorizations so an agent
         needs only USDC, not the gas token and not $CVNT, settling gaslessly
-        through Covenant&apos;s x402 facilitator. The Base seller is live,
-        returning EIP-3009 USDC challenges on Base mainnet; the token boundary
-        holds either way, $CVNT never crosses.
+        through Covenant&apos;s x402 facilitator. The Base seller returns
+        EIP-3009 USDC challenges on Base mainnet; the token boundary holds
+        either way, $CVNT never crosses.
       </p>
 
       <h2>A name that resolves to the identity</h2>

@@ -212,7 +212,7 @@ export default function BuildWithX402Page() {
       <h3>Set up a seller</h3>
       <p>
         With Node 24 and Express, install the official x402 packages, then point the middleware at
-        the facilitator. We ran this setup against the live facilitator, and it returns a{" "}
+        the facilitator. We ran this setup against the facilitator, and it returns a{" "}
         <code>402</code> that offers payment on both networks.
       </p>
       <pre>

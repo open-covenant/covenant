@@ -49,15 +49,14 @@ export default function ZauthPage() {
         <code>PayaiSolanaSigner</code>); zauth adds no new key handling.
       </p>
 
-      <h2>Live integration</h2>
+      <h2>Hub integration</h2>
       <p>
-        Covenant&apos;s public x402 seller (
+        Covenant&apos;s x402 seller (
         <code>https://x402-seller.opencovenant.org</code>, see{" "}
-        <Link href="/x402">Covenant x402</Link>) is registered and
-        health-monitored in the zauth provider hub on Solana mainnet. The hub
-        lists the endpoint, periodically health-checks the registered URL, and
-        tracks provider telemetry reported by the provider middleware mounted on
-        the seller.
+        <Link href="/x402">Covenant x402</Link>) registers in the zauth provider
+        hub on Solana mainnet. The hub lists live endpoints, periodically
+        health-checks each registered URL, and tracks provider telemetry
+        reported by the provider middleware mounted on the seller.
       </p>
       <p>
         One operational detail worth stating plainly: the hub registers a
